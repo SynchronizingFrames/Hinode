@@ -1,15 +1,19 @@
 // Title screen, pause menu, settings and credits. Styled as station name signs (css/menu.css).
 // The title sits over a live cinematic fly-through of the town (js/ui/cinematic.js).
 import { el, esc, yen } from './dom.js';
+import { padMapHTML } from './padui.js';
 
 const SKEY = 'hinode.settings';
-export const DEFAULTS = { volume: 0.8, sens: 1, invertY: false, showFps: false, reduceMotion: false, fpv: false, quality: 'high', fov: 65, res: 1 };
+export const DEFAULTS = { volume: 0.8, sens: 1, invertY: false, showFps: false, reduceMotion: false, fpv: false, quality: 'high', fov: 65, res: 1, padSens: 1, padInvertY: false, padDead: 0.15, padVibe: true, padPrompts: 'auto' };
 export function loadSettings(st) {
   let s;
   try { s = { ...DEFAULTS, ...(JSON.parse(st && st.getItem(SKEY)) || {}) }; } catch { s = { ...DEFAULTS }; }
   if (!QUALITY_INFO[s.quality]) s.quality = DEFAULTS.quality;
   s.fov = Math.min(100, Math.max(50, +s.fov || DEFAULTS.fov));
   s.res = Math.min(2, Math.max(0.5, +s.res || 1));
+  s.padSens = Math.min(2.5, Math.max(0.3, +s.padSens || 1));
+  s.padDead = Math.min(0.35, Math.max(0.05, +s.padDead || 0.15));
+  if (!['auto', 'xbox', 'ps'].includes(s.padPrompts)) s.padPrompts = 'auto';
   s.volume = s.volume != null && Number.isFinite(+s.volume) ? Math.min(1, Math.max(0, +s.volume)) : DEFAULTS.volume;
   return s;
 }
@@ -161,7 +165,7 @@ export class Menu {
 
   settingsForm() {
     const st = this.settings, t = this.tab;
-    const order = ['controls', 'graphics', 'comfort', 'sound'], to = Math.max(0, order.indexOf(t)), from = this.tabPrev ? Math.max(0, order.indexOf(this.tabPrev)) : to;
+    const order = ['controls', 'graphics', 'comfort', 'sound', 'pad'], to = Math.max(0, order.indexOf(t)), from = this.tabPrev ? Math.max(0, order.indexOf(this.tabPrev)) : to;
     this.tabPrev = null;
     const dir = to > from ? ' r' : to < from ? ' l' : '';
     const tab = (id, jp, en) => `<button type="button" class="m-tab${t === id ? ' on' : ''}" data-tab="${id}"><span>${jp}</span>${en}</button>`;
@@ -179,13 +183,26 @@ export class Menu {
         <label><span>Resolution boost <output>${Math.round(st.res * 100)}%</output></span><input type="range" min="0.5" max="2" step="0.05" value="${st.res}" data-set="res"></label>
         <label><span>Field of view <output>${Math.round(st.fov)}°</output></span><input type="range" min="50" max="100" step="1" value="${st.fov}" data-set="fov"></label>
         ${chk('showFps', 'Show frame rate (F3)')}`;
+    } else if (t === 'pad') {
+      const pi = this.padInfo ? this.padInfo() : null, on = !!(pi && pi.connected);
+      const PN = { xbox: 'Xbox controller', ps5: 'DualSense (PS5) controller', ps4: 'DualShock 4 (PS4) controller', generic: 'Controller' };
+      const auto = on && (pi.kind === 'ps4' || pi.kind === 'ps5') ? 'ps' : 'xbox', kind = st.padPrompts === 'auto' ? auto : st.padPrompts;
+      const pp = (id, jp, en) => `<button type="button" role="radio" aria-checked="${st.padPrompts === id}" class="m-q${st.padPrompts === id ? ' on' : ''}" data-pp="${id}"><span>${jp}</span>${en}</button>`;
+      body = `<p class="m-pad${on ? ' on' : ''}">${on ? `<b>${PN[pi.kind] || 'Controller'}</b> connected${pi.std ? '' : ' (non-standard mapping, some buttons may differ)'}` : 'No controller detected. Plug one in or pair it over Bluetooth, then press any button. Xbox One / Series, DualShock 4 and DualSense all work.'}</p>
+        <span class="m-padh">Button prompts</span>
+        <div class="m-qset m-ppset" role="radiogroup" aria-label="Button prompts">${pp('auto', '自動', 'Auto')}${pp('xbox', 'A', 'Xbox')}${pp('ps', '✕', 'PlayStation')}</div>
+        <label><span>Look sensitivity <output>${st.padSens.toFixed(2)}×</output></span><input type="range" min="0.3" max="2.5" step="0.05" value="${st.padSens}" data-set="padSens"></label>
+        <label><span>Stick dead zone <output>${Math.round(st.padDead * 100)}%</output></span><input type="range" min="0.05" max="0.35" step="0.01" value="${st.padDead}" data-set="padDead"></label>
+        ${chk('padInvertY', 'Invert look (Y axis)')}
+        ${chk('padVibe', 'Vibration', 'Rumble on crashes (Chrome and Edge).')}
+        <div class="m-padmap">${padMapHTML(kind, on && pi.kind === 'ps5')}</div>`;
     } else if (t === 'sound') {
       body = `<label><span>Master volume <output>${Math.round(st.volume * 100)}%</output></span><input type="range" min="0" max="1" step="0.05" value="${st.volume}" data-set="volume"></label>
         <p class="m-qdesc">Every sound is made live in the browser: engine and tyres, rain, footsteps, birds and insects, the Shinjuku crossing chime. Press H in the car to honk.</p>`;
     } else {
       body = `${chk('reduceMotion', 'Reduce motion', 'Less camera sway, no head bob, calmer menus.')}`;
     }
-    return `<div class="m-form m-set"><div class="m-tabs">${tab('controls', '操作', 'Controls')}${tab('graphics', '画質', 'Graphics')}${tab('comfort', '快適', 'Comfort')}${tab('sound', '音', 'Sound')}<i class="m-tabbar" style="--from:${from};--to:${to}"></i></div><div class="m-body${dir}">${body}</div></div>`;
+    return `<div class="m-form m-set"><div class="m-tabs">${tab('controls', '操作', 'Controls')}${tab('graphics', '画質', 'Graphics')}${tab('comfort', '快適', 'Comfort')}${tab('sound', '音', 'Sound')}${tab('pad', 'パッド', 'Controller')}<i class="m-tabbar" style="--from:${from};--to:${to}"></i></div><div class="m-body${dir}">${body}</div></div>`;
   }
 
   click(e) {
@@ -193,6 +210,8 @@ export class Menu {
     if (tb) { if (tb.dataset.tab !== this.tab) { this.tabPrev = this.tab; this.tab = tb.dataset.tab; if (this.sfx) this.sfx('tab'); this.render(); } return; }
     const qb = e.target.closest('[data-q]');
     if (qb) { if (this.sfx && qb.dataset.q !== this.settings.quality) this.sfx('select'); this.settings.quality = qb.dataset.q; this.onSetting('quality', qb.dataset.q); this.render(); return; }
+    const ppb = e.target.closest('[data-pp]');
+    if (ppb) { if (this.sfx && ppb.dataset.pp !== this.settings.padPrompts) this.sfx('select'); this.settings.padPrompts = ppb.dataset.pp; this.onSetting('padPrompts', ppb.dataset.pp); this.render(); return; }
     const b = e.target.closest('[data-act]'); if (!b) return;
     const a = b.dataset.act, A = this.actions;
     if (a === 'settings' || a === 'credits') { this.prev = this.screen; this.show(a); return; }
@@ -222,6 +241,8 @@ export class Menu {
     if (k === 'fov' && out) out.textContent = Math.round(v) + '°';
     if (k === 'volume' && out) out.textContent = Math.round(v * 100) + '%';
     if (k === 'res' && out) out.textContent = Math.round(v * 100) + '%';
+    if (k === 'padSens' && out) out.textContent = v.toFixed(2) + '×';
+    if (k === 'padDead' && out) out.textContent = Math.round(v * 100) + '%';
     this.onSetting(k, v);
   }
 }

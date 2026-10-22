@@ -59,7 +59,7 @@ export class Car {
   }
 
   step(dt, input, obs) {
-    const [ax, ay] = this.driving ? input.axes() : [0, 0];
+    const [ax, ay] = this.driving ? (input.driveAxes ? input.driveAxes() : input.axes()) : [0, 0];
     const hb = this.driving && input.key('Space');
     this.hb = hb;
     const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);

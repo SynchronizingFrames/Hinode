@@ -77,7 +77,7 @@ export class Hud {
     if (!p) { this.prompt.hidden = true; return; }
     this.prompt.hidden = false;
     this.prompt.className = 'h-prompt' + (p.passive ? ' passive' : '') + (p.verb === 'Deliver' ? ' deliver' : '');
-    this.prompt.innerHTML = `${p.passive ? '' : '<kbd>E</kbd>'}<div><b>${esc(p.text)}</b>${p.sub ? `<span>${esc(p.sub)}</span>` : ''}</div>`;
+    this.prompt.innerHTML = `${p.passive ? '' : (this.keyHTML || '<kbd>E</kbd>')}<div><b>${esc(p.text)}</b>${p.sub ? `<span>${esc(p.sub)}</span>` : ''}</div>`;
   }
 
   renderWay(t, pl, m) {

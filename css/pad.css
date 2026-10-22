@@ -1,0 +1,47 @@
+/* Controller glyphs (Xbox / PlayStation), the gamepad highlight and the Controller settings tab. */
+.pb {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.6em; height: 1.6em; padding: 0 .38em; margin: 0 .12em;
+  border-radius: 999px; font: 700 .74em/1 system-ui, 'Segoe UI', sans-serif; font-style: normal; letter-spacing: .02em;
+  color: #f4f1ea; background: rgba(20, 22, 28, .78); border: 1px solid rgba(255, 255, 255, .3);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .35), 0 1px 3px rgba(0, 0, 0, .35);
+  vertical-align: .05em; white-space: nowrap;
+}
+.pb-lb, .pb-rb, .pb-view, .pb-menu { border-radius: 7px; padding: 0 .45em; }
+.pb-lt, .pb-rt { border-radius: 7px 7px 11px 11px; padding: 0 .45em; }
+.pb-ls, .pb-rs, .pb-l3, .pb-r3 { border-style: dashed; }
+.pb-dpad { border-radius: 5px; }
+.pb-xbox.pb-a { background: #2f8f3a; border-color: #7fe08a; color: #fff; }
+.pb-xbox.pb-b { background: #b8322a; border-color: #ff8a80; color: #fff; }
+.pb-xbox.pb-x { background: #2a5fc0; border-color: #86b1ff; color: #fff; }
+.pb-xbox.pb-y { background: #d1a020; border-color: #ffe08a; color: #1b1608; }
+.pb-ps.pb-a, .pb-ps.pb-b, .pb-ps.pb-x, .pb-ps.pb-y { font-size: .9em; }
+.pb-ps.pb-a { color: #8fb3ff; }
+.pb-ps.pb-b { color: #ff7b7b; }
+.pb-ps.pb-x { color: #f49ad9; }
+.pb-ps.pb-y { color: #5fe0b0; }
+.h-prompt .pb { font-size: 1.05em; min-width: 1.9em; height: 1.9em; margin-right: .55em; flex: 0 0 auto; }
+#hint .pb { font-size: .82em; }
+#hint .pb-car { opacity: .8; }
+
+/* Gamepad highlight on menu items, tabs, sliders, checkboxes and dialogue replies. */
+.pad-focus {
+  outline: 2px solid rgba(255, 214, 150, .95) !important; outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(255, 190, 100, .14), 0 0 26px rgba(255, 180, 90, .32);
+  transition: outline-offset .18s ease, box-shadow .18s ease;
+}
+.m-sign.pad-focus { outline: none !important; }
+input[type="range"].pad-focus { outline-offset: 7px; }
+body.pad-nav { cursor: none; }
+
+/* Controller tab */
+.m-pad { margin: 0 0 .9em; padding: .7em .9em; border-radius: 10px; background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .1); font-size: .92em; }
+.m-pad.on { background: rgba(110, 200, 140, .1); border-color: rgba(120, 220, 150, .35); }
+.m-pad.on::before { content: ''; display: inline-block; width: .55em; height: .55em; margin-right: .55em; border-radius: 50%; background: #6fe08f; box-shadow: 0 0 10px #6fe08f; vertical-align: .05em; }
+.m-padmap { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .25em 1.4em; margin-top: 1em; font-size: .86em; }
+.m-padmap h4 { grid-column: 1 / -1; margin: .8em 0 .15em; font-size: .78em; letter-spacing: .14em; text-transform: uppercase; opacity: .6; }
+.m-padmap div { display: flex; align-items: center; gap: .55em; min-height: 1.9em; }
+.m-padmap div span:last-child { opacity: .86; }
+.m-padmap .gl { flex: 0 0 auto; min-width: 4.6em; }
+.m-ppset { grid-template-columns: repeat(3, 1fr); margin-bottom: 1em; }
+.m-padh { display: block; margin: .2em 0 .45em; font-size: .78em; letter-spacing: .14em; text-transform: uppercase; opacity: .6; }

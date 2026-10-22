@@ -75,7 +75,7 @@ export class Talk {
 
   update(dt, input) {
     if (!this.open) return;
-    if (input.tap('Escape')) return this.close();
+    if (input.tap('Escape') || input.tap('PadB')) return this.close();
     const adv = this.adv || input.tap('KeyE') || input.tap('Enter');
     this.adv = false;
     if (this.typing) {

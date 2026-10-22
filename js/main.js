@@ -25,6 +25,8 @@ import { yen } from './ui/dom.js';
 import { SaveStore, snapshot, apply, describe, browserStorage } from './game/save.js';
 import { Menu, loadSettings, saveSettings, hasSavedSettings } from './ui/menu.js';
 import { Cinematic } from './ui/cinematic.js';
+import { PadNav } from './ui/padnav.js';
+import { PadUI } from './ui/padui.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -100,6 +102,7 @@ async function boot() {
   const store = new SaveStore(browserStorage());
   const settings = loadSettings(store.s);
   if (touch.on && !hasSavedSettings(store.s)) settings.quality = 'medium'; // phones start on a preset they can hold
+  let padui = null, padnav = null;
   const applySetting = (k, v) => {
     if (k === 'sens') cam.sens = v;
     else if (k === 'invertY') cam.invertY = v;
@@ -108,6 +111,11 @@ async function boot() {
     else if (k === 'fpv') { cam.fpv = !!v; cam.focus = null; cam.eyeY = null; }
     else if (k === 'quality') r.setQuality(v);
     else if (k === 'res') r.resMul = +v || 1;
+    else if (k === 'padSens') input.padSens = +v || 1;
+    else if (k === 'padInvertY') input.padInvertY = !!v;
+    else if (k === 'padDead') input.padDead = +v || 0.15;
+    else if (k === 'padVibe') input.padVibe = !!v;
+    else if (k === 'padPrompts') { input.padPrompts = v || 'auto'; if (padui) padui.refresh(); }
     else if (k === 'volume') audio.setVolume(v);
     else if (k === 'fov') { cam.fov = v * Math.PI / 180; if (car.baseFov != null) car.baseFov = cam.fov; }
     saveSettings(store.s, settings);
@@ -197,11 +205,51 @@ async function boot() {
     else if (type === 'cancelled') hud.toast(`Dropped · ${d.job.title}`, d.carried ? 'Returned to the board. (-1 trust)' : 'Back on the board.', '', 3000);
   });
 
+  // Pre-render the city before the loading screen goes. Every chunk, the car, traffic, crowd and the rain are drawn
+  // from three angles at noon, night and dusk (rain on the night pass), so the GPU driver compiles every shader
+  // variant and uploads every mesh and texture now, instead of stalling the first time something comes into view.
+  const PREWARM = { done: false, passes: 0, ms: 0 };
+  {
+    const t0 = performance.now(), passes = TEST ? 1 : 3;
+    const p0 = Array.from(cam.pos), q0 = Array.from(cam.target), rain0 = ENV.rain;
+    for (let i = 0; i < passes; i++) {
+      progress(1, `Pre-rendering the city ${i + 1}/${passes}`);
+      const a = i * 2.1;
+      cam.pos[0] = p0[0]; cam.pos[1] = 30; cam.pos[2] = p0[2];
+      cam.target[0] = p0[0] + Math.sin(a) * 40; cam.target[1] = 4; cam.target[2] = p0[2] + Math.cos(a) * 40;
+      applyTimeOfDay(ENV, [720, 1260, 1020][i]);
+      weather.apply(ENV);
+      ENV.rain = i === 1 ? 0.7 : 0;
+      ENV.lampColBuf = ENV.lampColBuf || new Float32Array(48);
+      ENV.lampBuf = nearestLamps(world.lamps, cam.target, ENV.lampBuf, ENV.lampColBuf, ENV.lampCol);
+      ENV.time = i;
+      r.begin(cam, ENV);
+      for (const c of world.chunks) r.draw(c.mesh);
+      try { npcs.draw(r, cam, 0); car.draw(r, cam, 0, ENV); traffic.draw(r, cam); crowd.draw(r, cam); player.draw(r, 0); } catch (_) { /* a prop that is not ready yet is fine */ }
+      r.end();
+      PREWARM.passes++;
+      await new Promise((res) => { let ok = false; const go = () => { if (!ok) { ok = true; res(); } }; requestAnimationFrame(go); setTimeout(go, 120); });
+    }
+    for (let k = 0; k < 3; k++) { cam.pos[k] = p0[k]; cam.target[k] = q0[k]; }
+    ENV.rain = rain0;
+    PREWARM.done = true; PREWARM.ms = Math.round(performance.now() - t0);
+  }
+
   $('boot').classList.add('out');
   setTimeout(() => { $('boot').hidden = true; }, 700);
   $('hud').hidden = false;
   const hint = $('hint'), fps = $('fps');
   let hintTimer = 0, moved = 0;
+  padui = new PadUI({ input, hint, hud, talk });
+  padnav = new PadNav(input);
+  menu.padInfo = () => input.padInfo;
+  const PADN = { xbox: 'Xbox controller', ps5: 'DualSense (PS5)', ps4: 'DualShock 4 (PS4)', generic: 'Controller' };
+  input.onDevice = (why) => {
+    if (padui.refresh()) { hint.classList.remove('fade'); hintTimer = 0; moved = 0; }
+    if (why === 'connected') hud.toast('Controller connected', `${PADN[input.padInfo.kind] || 'Controller'} ready. Tune it in Settings, Controller.`, '', 3200);
+    else if (why === 'disconnected') hud.toast('Controller disconnected', 'Back to keyboard and mouse.', 'warn', 2400);
+    if (why !== 'device' && menu.screen === 'settings' && menu.tab === 'pad') menu.render();
+  };
   if (ui.mode === 'title') {
     const L = store.load(), info = { save: L.data ? describe(L.data) : null };
     if (L.status === 'recovered') { info.note = 'Your last save was damaged, so the backup from just before it was loaded instead.'; info.noteKind = 'bad'; }
@@ -212,7 +260,10 @@ async function boot() {
 
   const state = { frames: 0, dt: 0, avg: 16.7, visible: 0, paused: false };
   const tick = (dt) => {
+    input.menuOpen = ui.mode !== 'play';
+    input.uiOpen = input.menuOpen || !!talk.open;
     input.pollPad();
+    if (padnav) padnav.update();
     weather.update(dt, clock);
     if (ui.mode === 'play') {
       clock.update(dt);
@@ -271,6 +322,10 @@ async function boot() {
     else if (ui.mode === 'journal') { if (input.tap('Escape') || input.tap('Tab')) setMode('play'); }
     else if (ui.mode === 'pause') { if (input.tap('Escape') && menu.screen === 'pause') setMode('play'); }
     else if (ui.mode === 'title') cine.update(dt, cam, weather, menu, settings.reduceMotion);
+    // Esc / B / Circle on a sub-screen (Settings, About) goes back one level, from the title as well.
+    if ((ui.mode === 'pause' || ui.mode === 'title') && menu.screen && menu.screen !== ui.mode && input.tap('Escape')) {
+      const back = menu.list && menu.list.querySelector('[data-act="back"]'); if (back) back.click();
+    }
     input.endFrame();
   };
 
@@ -291,7 +346,7 @@ async function boot() {
   // so results don't depend on how fast the (software) test GPU renders.
   if (TEST) window.__HINODE__ = { touch, crowd, audio,
     weather, cine,
-    r, world, input, cam, player, state, env: ENV, npcs, talk, car, traffic, clock, career, jobs, interact, hud, board, journal, summary, goals,
+    r, world, input, cam, player, state, env: ENV, padnav, padui, prewarm: PREWARM, npcs, talk, car, traffic, clock, career, jobs, interact, hud, board, journal, summary, goals,
     ui: { get mode() { return ui.mode; }, setMode, endDay }, menu, store, save: doSave, settings,
     sim(sec, step = 1 / 60) { const n = Math.max(1, Math.round(sec / step)); for (let i = 0; i < n; i++) tick(step); return [...player.pos]; },
   };
@@ -306,6 +361,7 @@ async function boot() {
       if (input.hit('F3')) fps.hidden = !fps.hidden;
       if (input.hit('Escape')) input.releaseLock();
       if (!state.paused) tick(dt);
+      if (ui.mode === 'play' && car.driving && car.impact > 1.2 && input.rumble) input.rumble(Math.min(1, car.impact / 8), Math.min(1, car.impact / 5), 160 + Math.min(240, car.impact * 25));
       audio.update(dt, { car, player, input, weather, clock, crowd, mode: ui.mode, paused: state.paused });
 
       applyTimeOfDay(ENV, ui.mode === 'title' && cine.active ? cine.min : clock.min);
@@ -320,8 +376,10 @@ async function boot() {
       for (const c of world.chunks) {
         if (!c.far) {
           const dx = c.x - cam.pos[0], dz = c.z - cam.pos[2], d = Math.hypot(dx, dz);
-          if (d > r.drawDist) continue;
-          if (d > 45 && (dx * fx + dz * fz) / (d * fl) < -0.25) continue;
+          // 29 m = half-diagonal of a 40 m chunk: keep every chunk that reaches into draw range, and only skip ones that
+          // sit entirely behind the camera, with room left for the shadows they cast forward (the old skip was the pop-in).
+          if (d - 29 > r.drawDist) continue;
+          if ((dx * fx + dz * fz) / fl < -89) continue;
         }
         r.draw(c.mesh); vis++;
       }

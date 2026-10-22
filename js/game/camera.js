@@ -22,7 +22,8 @@ export class CameraRig {
   // subject: the player (on foot) or car.camTarget (driving). car: the Car when driving, else null.
   update(dt, input, subject, col, car = null) {
     const k = 0.0024 * this.sens;
-    const mx = (input.mdx + input.pad.mx * 900 * dt) * k, my = (input.mdy + input.pad.my * 700 * dt) * k * (this.invertY ? -1 : 1);
+    // Mouse: pixels x sensitivity. Right stick: radians per second (curved and scaled in input.js).
+    const mx = input.mdx * k + input.pad.mx * 2.8 * dt, my = input.mdy * k * (this.invertY ? -1 : 1) + input.pad.my * 1.8 * dt;
     if (this.fpv) return this.firstPerson(dt, input, subject, car, mx, my);
     this.yaw -= mx;
     this.pitch += my;
