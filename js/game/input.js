@@ -1,4 +1,4 @@
-// Keyboard, mouse (pointer lock) and gamepad. Gameplay reads a single merged state each frame.
+// Keyboard, mouse (pointer lock), gamepad and touch (ui/touch.js writes into `touch`). Gameplay reads a single merged state each frame.
 
 export class Input {
   constructor(canvas) {
@@ -9,6 +9,8 @@ export class Input {
     this.enabled = true;           // false while a menu/dialogue owns the keyboard
     this.locked = false;
     this.pad = { mx: 0, my: 0, lx: 0, ly: 0, sprint: false };
+    this.touch = { lx: 0, ly: 0, run: false, sprint: false };
+    this.touchOn = false;
     this._padPrev = {};
 
     const typing = () => { const a = document.activeElement; return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable); };
@@ -35,7 +37,7 @@ export class Input {
   }
   releaseLock() { if (document.pointerLockElement) document.exitPointerLock(); }
 
-  clear() { this.down.clear(); this.pressed.clear(); this.mdx = this.mdy = this.wheel = 0; }
+  clear() { this.down.clear(); this.pressed.clear(); this.mdx = this.mdy = this.wheel = 0; this.touch.lx = this.touch.ly = 0; this.touch.sprint = false; }
 
   key(code) { return this.enabled && this.down.has(code); }
   hit(code) { return this.enabled && this.pressed.has(code); }
@@ -48,11 +50,12 @@ export class Input {
     let x = (this.key('KeyD') || this.key('ArrowRight') ? 1 : 0) - (this.key('KeyA') || this.key('ArrowLeft') ? 1 : 0);
     let y = (this.key('KeyW') || this.key('ArrowUp') ? 1 : 0) - (this.key('KeyS') || this.key('ArrowDown') ? 1 : 0);
     if (Math.abs(this.pad.lx) > 0.15 || Math.abs(this.pad.ly) > 0.15) { x = this.pad.lx; y = -this.pad.ly; }
+    if (Math.abs(this.touch.lx) > 0.06 || Math.abs(this.touch.ly) > 0.06) { x = this.touch.lx; y = -this.touch.ly; }
     const l = Math.hypot(x, y);
     return l > 1 ? [x / l, y / l] : [x, y];
   }
 
-  sprint() { return this.key('ShiftLeft') || this.key('ShiftRight') || (this.enabled && this.pad.sprint); }
+  sprint() { return this.key('ShiftLeft') || this.key('ShiftRight') || (this.enabled && (this.pad.sprint || this.touch.run || this.touch.sprint)); }
 
   // Poll gamepad once per frame; buttons are mapped onto key codes so gameplay has one code path.
   pollPad() {

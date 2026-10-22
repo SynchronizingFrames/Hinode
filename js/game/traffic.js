@@ -60,6 +60,7 @@ export class Traffic {
       o.push({ x: b.x + sy * h, z: b.z + cy * h, r: 0.85, bot: b }, { x: b.x - sy * h, z: b.z - cy * h, r: 0.85, bot: b });
     }
     if (npcs) for (const n of npcs.list) if (n.out) o.push({ x: n.x, z: n.z, r: 0.4 });
+    if (this.crowd) for (const w of this.crowd.near) o.push({ x: w.x, z: w.z, r: 0.35 });
     return o;
   }
 
@@ -80,6 +81,11 @@ export class Traffic {
       }
       if (car) look(car.x, car.z, 5.4);
       if (player && !(car && car.driving)) look(player.pos[0], player.pos[2], 3.6);
+      const C = this.crowd;
+      if (C) {   // the scramble: stop at the line on red, never drive into people still crossing
+        if (C.red) { const sx = 206 - b.x, sz = -b.z, d = Math.hypot(sx, sz); if (d > 11.5 && d < 28 && sx * Math.sin(b.yaw) + sz * Math.cos(b.yaw) > 0.6 * d) vw = Math.min(vw, Math.max(0, d - 12.5) * 1.1); }
+        for (const w of C.crossing) look(w.x, w.z, 3.2);
+      }
       if (b.hold > 0) { b.hold -= dt; vw = 0; }
       b.brake = vw < b.v - 0.5;
       b.v = damp(b.v, vw, vw < b.v ? 4 : 1.2, dt);

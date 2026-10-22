@@ -16,7 +16,7 @@ export const QUALITY = {
   low:    { label: 'Low',    scale: 0.7,  shadow: 1024, post: false, rain: 2500,  draw: 150, lod: 16 },
   medium: { label: 'Medium', scale: 0.85, shadow: 2048, post: true,  rain: 4500,  draw: 190, lod: 24 },
   high:   { label: 'High',   scale: 1,    shadow: 2048, post: true,  rain: 7000,  draw: 230, lod: 32 },
-  ultra:  { label: 'Ultra',  scale: 1.5,  shadow: 4096, post: true,  rain: 12000, draw: 320, lod: 70 },
+  ultra:  { label: 'Ultra',  scale: 2,    shadow: 8192, post: true,  rain: 12000, draw: 600, lod: 160, fx: true, msaa: 8, pcss: true, vol: true, fxFull: true },
 };
 
 const WORLD_VS = `#version 300 es
@@ -43,6 +43,27 @@ uniform mat4 uLightVP;
 uniform highp sampler2DShadow uShadow;
 uniform vec2 uShadowTexel;
 uniform float uShadowOn;
+uniform highp sampler2D uShadowRaw;
+uniform float uPcss, uShadowRange, uShadowWorld;
+// Ultra: contact-hardening soft shadows (PCSS). Blocker search on the raw depth map, then a wide
+// rotated Vogel-disk PCF whose radius grows with the blocker-to-receiver distance.
+float shadowPcss(vec3 p, float z){
+  float rot = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) * 6.2831853;
+  float sr = 26.0, bs = 0.0, bn = 0.0;
+  for (int i = 0; i < 16; i++) {
+    float fi = float(i), r = sqrt((fi + 0.5) / 16.0), a = rot + fi * 2.39996323;
+    float sz = texture(uShadowRaw, p.xy + vec2(cos(a), sin(a)) * r * sr * uShadowTexel).r;
+    if (sz < z) { bs += sz; bn += 1.0; }
+  }
+  if (bn < 0.5) return 1.0;
+  float pen = (z - bs / bn) * uShadowRange * 0.024 / uShadowWorld;
+  float rt = clamp(pen, 1.2, 24.0), s = 0.0;
+  for (int i = 0; i < 32; i++) {
+    float fi = float(i), r = sqrt((fi + 0.5) / 32.0), a = rot * 1.7 + fi * 2.39996323;
+    s += texture(uShadow, vec3(p.xy + vec2(cos(a), sin(a)) * r * rt * uShadowTexel, z));
+  }
+  return s / 32.0;
+}
 out vec4 o;
 vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0); }
 float shadow(vec3 n, float ndl){
@@ -57,6 +78,7 @@ float shadow(vec3 n, float ndl){
     for (int x = -1; x <= 1; x++)
       s += texture(uShadow, vec3(p.xy + vec2(float(x), float(y)) * uShadowTexel, z));
   s /= 9.0;
+  if (uPcss > 0.5) s = shadowPcss(p, z);
   // Fade the shadow out at the edge of the map so moving past its range has no hard line.
   vec2 e = min(p.xy, 1.0 - p.xy);
   float edge = clamp(min(e.x, e.y) / 0.06, 0.0, 1.0);
@@ -402,24 +424,229 @@ void main(){
 const FINAL_FS = `#version 300 es
 precision highp float; precision highp sampler2D;
 in vec2 vUV;
-uniform sampler2D uHdr, uBloom;
-uniform float uBloomK, uVig, uTime;
+uniform sampler2D uHdr, uBloom, uFx, uDepth, uVol;
+uniform float uBloomK, uVig, uTime, uUltra, uVolOn;
 uniform vec2 uRes;
+uniform vec3 uSun, uSunCol;
 out vec4 o;
 vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0); }
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 void main(){
-  vec3 c = texture(uHdr, vUV).rgb + texture(uBloom, vUV).rgb * uBloomK;
+  vec3 c;
+  vec3 bl = texture(uBloom, vUV).rgb;
+  if (uUltra > 0.5) {
+    // Lens: a whisper of chromatic fringing toward the frame edges.
+    vec2 dq = vUV - 0.5; float r2 = dot(dq, dq);
+    vec2 off = dq * r2 * 0.010;
+    c = vec3(texture(uHdr, vUV + off).r, texture(uHdr, vUV).g, texture(uHdr, vUV - off).b);
+    // Ambient occlusion (emissive neon/lamps stay bright) + screen-space reflections on wet ground.
+    vec4 fx = texture(uFx, vUV);
+    float l0 = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = c * mix(fx.a, 1.0, smoothstep(1.2, 5.0, l0)) + fx.rgb;
+    if (uVolOn > 0.5) {
+      vec2 vt = 2.0 / uRes;
+      c += texture(uVol, vUV).rgb * 0.4 + (texture(uVol, vUV + vt).rgb + texture(uVol, vUV - vt).rgb + texture(uVol, vUV + vec2(vt.x, -vt.y)).rgb + texture(uVol, vUV + vec2(-vt.x, vt.y)).rgb) * 0.15;
+    }
+    // Sun shafts: march toward the sun counting open sky; buildings and trees cut the beams.
+    if (uSun.z > 0.001) {
+      vec2 dl = (uSun.xy - vUV) / 64.0;
+      vec2 uv = vUV + dl * h21(gl_FragCoord.xy);
+      float acc = 0.0, dec = 1.0;
+      for (int i = 0; i < 64; i++) {
+        uv += dl;
+        acc += step(0.999999, texture(uDepth, clamp(uv, 0.001, 0.999)).r) * dec;
+        dec *= 0.978;
+      }
+      float sd = length((vUV - uSun.xy) * vec2(uRes.x / uRes.y, 1.0));
+      c += uSunCol * (acc / 64.0) * exp(-sd * 1.7) * uSun.z * (uVolOn > 0.5 ? 0.16 : 0.3);
+    }
+    // Lens ghosts + halo from the bloom buffer (headlights, neon, the sun).
+    vec2 g = vec2(1.0) - vUV, gv = (vec2(0.5) - g) * 0.42;
+    vec3 gh = vec3(0.0);
+    for (int i = 1; i < 5; i++) {
+      vec2 gu = g + gv * float(i);
+      float w = pow(1.0 - clamp(length(vec2(0.5) - gu) / 0.71, 0.0, 1.0), 6.0);
+      gh += texture(uBloom, gu).rgb * w * vec3(1.0 - 0.15 * float(i), 0.9, 0.75 + 0.12 * float(i));
+    }
+    vec2 hu = g + normalize(vec2(0.5) - g + 1e-5) * 0.46;
+    float hw = pow(1.0 - clamp(length(vec2(0.5) - hu) / 0.71, 0.0, 1.0), 5.0);
+    gh += texture(uBloom, hu).rgb * hw * vec3(0.8, 0.9, 1.1);
+    bl += gh * 0.06;
+  } else {
+    c = texture(uHdr, vUV).rgb;
+  }
+  c += bl * uBloomK;
   c = aces(c);
   // Gentle grade: a touch more saturation.
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = max(mix(vec3(l), c, 1.07), 0.0);
+  if (uUltra > 0.5) {
+    // Filmic finish: soft S-curve, cool shadows, warm highlights.
+    c = mix(c, c * c * (3.0 - 2.0 * c), 0.14);
+    c *= mix(vec3(0.97, 1.0, 1.04), vec3(1.035, 1.0, 0.965), smoothstep(0.15, 0.75, l));
+  }
   c = pow(c, vec3(1.0 / 2.2));
   // Vignette (aspect-corrected) and a 1/255 dither so the sky gradient never bands.
   vec2 q = vUV - 0.5; q.x *= uRes.x / uRes.y;
   c *= 1.0 - smoothstep(0.3, 1.15, length(q)) * uVig;
+  if (uUltra > 0.5) c += (h21(gl_FragCoord.xy * 1.37 + fract(uTime * 13.0) * 97.0) - 0.5) * 0.014 * (1.0 - l);
   c += (h21(gl_FragCoord.xy + fract(uTime * 7.0) * 61.0) - 0.5) / 255.0;
   o = vec4(c, 1.0);
+}`;
+
+// Ultra: half-res screen-space ambient occlusion (a) + wet-ground screen-space reflections (rgb).
+const FX_FS = `#version 300 es
+precision highp float; precision highp sampler2D;
+in vec2 vUV;
+uniform sampler2D uDepth, uScene;
+uniform mat4 uVP, uInvVP;
+uniform vec3 uCam;
+uniform vec2 uTexel;
+uniform float uWet, uTime;
+out vec4 o;
+const float NEAR = 0.1, FAR = 900.0;
+float lin(float d){ float z = d * 2.0 - 1.0; return 2.0 * NEAR * FAR / (FAR + NEAR - z * (FAR - NEAR)); }
+vec3 wp(vec2 uv, float d){ vec4 p = uInvVP * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); return p.xyz / p.w; }
+float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float ign(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+float hs(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+void main(){
+  float d = texture(uDepth, vUV).r;
+  if (d >= 0.999999) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  vec3 P = wp(vUV, d);
+  vec2 tx = vec2(uTexel.x * 2.0, 0.0), ty = vec2(0.0, uTexel.y * 2.0);
+  vec3 Pr = wp(vUV + tx, texture(uDepth, vUV + tx).r), Pl = wp(vUV - tx, texture(uDepth, vUV - tx).r);
+  vec3 Pu = wp(vUV + ty, texture(uDepth, vUV + ty).r), Pd = wp(vUV - ty, texture(uDepth, vUV - ty).r);
+  vec3 dx = length(Pr - P) < length(P - Pl) ? Pr - P : P - Pl;
+  vec3 dy = length(Pu - P) < length(P - Pd) ? Pu - P : P - Pd;
+  vec3 N = normalize(cross(dx, dy) + 1e-7);
+  vec3 toC = uCam - P; float dist = length(toC);
+  if (dot(N, toC) < 0.0) N = -N;
+  vec3 T = normalize(abs(N.y) < 0.95 ? cross(N, vec3(0.0, 1.0, 0.0)) : cross(N, vec3(1.0, 0.0, 0.0)));
+  vec3 Bt = cross(N, T);
+  float rot = ign(gl_FragCoord.xy) * 6.2831853, jit = h21(gl_FragCoord.xy + 17.0);
+  float R = 0.6 + dist * 0.008, lp = lin(d), occ = 0.0;
+  for (int i = 0; i < 24; i++) {
+    float fi = float(i), u = (fi + jit) / 24.0, a = rot + fi * 2.39996323;
+    vec3 dir = (T * cos(a) + Bt * sin(a)) * sqrt(u) + N * sqrt(1.0 - u);
+    float k = (fi + 0.5) / 24.0;
+    vec4 cs = uVP * vec4(P + N * 0.03 + dir * R * mix(0.12, 1.0, k * k), 1.0);
+    if (cs.w <= 0.0) continue;
+    vec3 nd = cs.xyz / cs.w; vec2 su = nd.xy * 0.5 + 0.5;
+    if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) continue;
+    float sd = lin(texture(uDepth, su).r);
+    occ += step(0.02, lin(nd.z * 0.5 + 0.5) - sd) * smoothstep(0.0, 1.0, R / max(abs(lp - sd), 1e-3));
+  }
+  float ao = 1.0 - occ / 24.0;
+  ao = mix(1.0, ao, smoothstep(90.0, 25.0, dist));
+  ao = clamp(pow(max(ao, 0.0), 1.6), 0.0, 1.0);
+  vec3 refl = vec3(0.0);
+  if (uWet > 0.02 && N.y > 0.92 && P.y < 0.6) {
+    vec2 q = P.xz * 0.23, qi = floor(q), qf = fract(q);
+    qf = qf * qf * (3.0 - 2.0 * qf);
+    float vn = mix(mix(hs(qi), hs(qi + vec2(1.0, 0.0)), qf.x), mix(hs(qi + vec2(0.0, 1.0)), hs(qi + vec2(1.0, 1.0)), qf.x), qf.y);
+    float pud = smoothstep(0.56, 0.7, vn) * smoothstep(0.3, 0.8, uWet);
+    float kw = uWet * (0.22 + 0.78 * pud);
+    vec3 V = normalize(P - uCam);
+    vec2 jn = vec2(h21(P.xz * 3.1 + uTime), h21(P.xz * 2.7 - uTime)) - 0.5;
+    vec3 Nr = normalize(vec3(jn.x * (1.0 - pud) * 0.06, 1.0, jn.y * (1.0 - pud) * 0.06));
+    vec3 Rd = reflect(V, Nr);
+    float F = 0.02 + 0.98 * pow(1.0 - clamp(-dot(V, Nr), 0.0, 1.0), 5.0);
+    float t = 0.2 * (0.75 + 0.5 * jit), tp = 0.0, fade = 0.0;
+    vec2 hit = vec2(-1.0);
+    for (int i = 0; i < 96; i++) {
+      vec4 cq = uVP * vec4(P + Rd * t, 1.0);
+      if (cq.w <= 0.0) break;
+      vec3 nq = cq.xyz / cq.w; vec2 qu = nq.xy * 0.5 + 0.5;
+      if (qu.x < 0.0 || qu.x > 1.0 || qu.y < 0.0 || qu.y > 1.0) break;
+      float sd = texture(uDepth, qu).r, zs = lin(sd), zq = lin(nq.z * 0.5 + 0.5);
+      if (sd < 0.999999 && zq > zs && zq - zs < max(0.6, t * 0.12)) {
+        float a0 = tp, a1 = t;
+        for (int j = 0; j < 8; j++) {
+          float am = 0.5 * (a0 + a1);
+          vec4 cm = uVP * vec4(P + Rd * am, 1.0);
+          vec3 nm = cm.xyz / cm.w; vec2 um = nm.xy * 0.5 + 0.5;
+          if (lin(nm.z * 0.5 + 0.5) > lin(texture(uDepth, um).r)) { a1 = am; qu = um; } else { a0 = am; }
+        }
+        hit = qu;
+        vec2 e = smoothstep(0.0, 0.08, qu) * smoothstep(1.0, 0.92, qu);
+        fade = e.x * e.y * (1.0 - float(i) / 96.0);
+        break;
+      }
+      tp = t; t = t * 1.075 + 0.035;
+    }
+    if (hit.x >= 0.0) refl = min(texture(uScene, hit).rgb, vec3(24.0)) * kw * mix(0.18, 1.0, F) * fade * smoothstep(80.0, 30.0, dist);
+  }
+  o = vec4(refl, ao);
+}`;
+
+// Ultra: volumetric light. Ray-march the sun's shadow map through height fog (light shafts that
+// real buildings and trees cut), plus analytic in-scattering around the nearest street lamps.
+const VOL_FS = `#version 300 es
+precision highp float; precision highp sampler2D; precision highp sampler2DShadow;
+in vec2 vUV;
+uniform sampler2D uDepth;
+uniform sampler2DShadow uShadow;
+uniform mat4 uInvVP, uLightVP;
+uniform vec3 uCam, uSunDir, uSunCol;
+uniform float uSunK, uLampK, uDens, uShadowOn;
+uniform vec4 uLamps[16]; uniform vec3 uLampC[16]; uniform int uLampN;
+out vec4 o;
+float ign(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+vec3 wp(vec2 uv, float d){ vec4 p = uInvVP * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); return p.xyz / p.w; }
+void main(){
+  float d = texture(uDepth, vUV).r;
+  vec3 P = wp(vUV, min(d, 0.99999));
+  vec3 V = P - uCam; float L = length(V); V /= max(L, 1e-4);
+  if (d >= 0.999999) L = 160.0;
+  vec3 col = vec3(0.0);
+  if (uSunK > 0.001) {
+    float Lm = min(L, 110.0), st = Lm / 56.0, j = ign(gl_FragCoord.xy), acc = 0.0;
+    for (int i = 0; i < 56; i++) {
+      vec3 X = uCam + V * (st * (float(i) + j));
+      vec4 ls = uLightVP * vec4(X, 1.0);
+      vec3 q = ls.xyz / ls.w * 0.5 + 0.5;
+      float lit = 1.0;
+      if (uShadowOn > 0.5 && q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0 && q.z < 1.0) lit = texture(uShadow, vec3(q.xy, q.z - 0.0012));
+      acc += lit * exp(-max(X.y, 0.0) * 0.045);
+    }
+    float c = dot(V, uSunDir), g = 0.58, g2 = g * g;
+    float ph = mix(0.0796, (1.0 - g2) / (12.566 * pow(1.0 + g2 - 2.0 * g * c, 1.5)), 0.75);
+    col += uSunCol * (acc * st * uDens * ph * uSunK);
+  }
+  if (uLampK > 0.001) {
+    for (int i = 0; i < 16; i++) {
+      if (i >= uLampN) break;
+      vec4 Lp = uLamps[i];
+      if (Lp.w <= 0.0) continue;
+      vec3 w = Lp.xyz - uCam; float tc = dot(w, V);
+      float h = sqrt(max(dot(w, w) - tc * tc, 0.09));
+      float I = (atan((min(L, 120.0) - tc) / h) - atan(-tc / h)) / h;
+      col += uLampC[i] * (Lp.w * I * uLampK);
+    }
+  }
+  o = vec4(col, 1.0);
+}`;
+
+// Depth-aware 5x5 blur for the half-res effects buffer (keeps AO from bleeding across edges).
+const FXBLUR_FS = `#version 300 es
+precision highp float; precision highp sampler2D;
+in vec2 vUV;
+uniform sampler2D uSrc, uDepth;
+uniform vec2 uTexel;
+out vec4 o;
+float lin(float d){ float z = d * 2.0 - 1.0; return 2.0 * 0.1 * 900.0 / (900.1 - z * 899.9); }
+void main(){
+  float dc = lin(texture(uDepth, vUV).r);
+  vec4 acc = vec4(0.0); float ws = 0.0;
+  for (int y = -2; y <= 2; y++) {
+    for (int x = -2; x <= 2; x++) {
+      vec2 uv = vUV + vec2(float(x), float(y)) * uTexel;
+      float w = exp(-float(x * x + y * y) * 0.18) * exp(-abs(lin(texture(uDepth, uv).r) - dc) / max(dc * 0.02, 0.05));
+      acc += texture(uSrc, uv) * w; ws += w;
+    }
+  }
+  o = acc / max(ws, 1e-4);
 }`;
 
 export class WebGLUnavailable extends Error {}
@@ -465,6 +692,10 @@ export class Renderer {
     this.quality = QUALITY[q] ? q : 'high'; this.Q = P;
     this.scale = P.scale; this.postOn = P.post;
     this.rainLimit = P.rain; this.drawDist = P.draw; this.lodDist = P.lod;
+    if (this.postOK) {
+      const want = this.soft ? 0 : Math.min(P.msaa || 4, this.maxSamples || 0);
+      if (want !== this.samplesWant || !!P.fx !== !!this.fxWant || !!P.fxFull !== !!this.fxFullWant) { this.samplesWant = want; this.samples = want; this.fxWant = !!P.fx; this.fxFullWant = !!P.fxFull; this.freePost(); this.pw = 0; this.ph = 0; }
+    }
     let size = this.soft ? Math.min(1024, P.shadow) : P.shadow;
     const max = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
     size = Math.min(size, max);
@@ -510,12 +741,16 @@ export class Renderer {
       if (!gl.getExtension('EXT_color_buffer_float')) { console.warn('[HINODE] float render targets unavailable; post-processing off'); return false; }
       let max = 0;
       try { const sm = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES); max = sm && sm.length ? sm[0] : 0; } catch (e) {}
-      this.samples = this.soft ? 0 : Math.min(4, max);
+      this.maxSamples = max;
+      this.samples = this.soft ? 0 : Math.min(4, max); this.samplesWant = this.samples;
       this.bloomLevels = this.soft ? 4 : 6;
       this.pp = {
         pre: this.program(POST_VS, PRE_FS), down: this.program(POST_VS, DOWN_FS),
         up: this.program(POST_VS, UP_FS), final: this.program(POST_VS, FINAL_FS),
       };
+      try { this.fxP = { fx: this.program(POST_VS, FX_FS), blur: this.program(POST_VS, FXBLUR_FS) }; }
+      catch (e) { console.warn('[HINODE] ultra effects unavailable: ' + e.message); this.fxP = null; }
+      if (this.fxP) { try { this.fxP.vol = this.program(POST_VS, VOL_FS); } catch (e) { console.warn('[HINODE] volumetric light unavailable: ' + e.message); } }
       return true;
     } catch (e) { console.warn('[HINODE] post-processing init failed: ' + e.message); return false; }
   }
@@ -523,7 +758,7 @@ export class Renderer {
   freePost() {
     const gl = this.gl, R = this.postRes;
     if (R) { R.tex.forEach((t) => gl.deleteTexture(t)); R.fbo.forEach((f) => gl.deleteFramebuffer(f)); R.rb.forEach((b) => gl.deleteRenderbuffer(b)); }
-    this.postRes = null; this.msFbo = null; this.sceneFbo = null; this.sceneTex = null; this.bloom = [];
+    this.postRes = null; this.msFbo = null; this.sceneFbo = null; this.sceneTex = null; this.bloom = []; this.fxRes = null;
   }
 
   // (Re)allocate the HDR scene buffer and bloom chain for the current canvas size.
@@ -532,6 +767,8 @@ export class Renderer {
     const gl = this.gl;
     this.freePost();
     this.pw = W; this.ph = H;
+    // Supersampled frames already anti-alias; cap MSAA by pixel count so 4K-class buffers stay in VRAM.
+    if (this.samplesWant != null) this.samples = Math.min(this.samplesWant, W * H > 12e6 ? 2 : W * H > 4.2e6 ? 4 : 8);
     const R = this.postRes = { tex: [], fbo: [], rb: [] };
     const tex = (w, h) => {
       const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
@@ -564,11 +801,22 @@ export class Renderer {
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, c);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, d);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) this.msFbo = f;
-        else { console.warn('[HINODE] MSAA float buffer unavailable; using non-MSAA HDR'); this.samples = 0; }
+        else { console.warn('[HINODE] MSAA float buffer unavailable; using non-MSAA HDR'); this.samples = 0; this.samplesWant = 0; }
+      }
+      let depthTex = null;
+      if (this.fxWant && this.fxP) {
+        depthTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, depthTex);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, W, H);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        R.tex.push(depthTex);
       }
       if (!this.msFbo) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFbo);
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb(0, gl.DEPTH_COMPONENT24));
+        if (depthTex) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTex, 0);
+        else gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb(0, gl.DEPTH_COMPONENT24));
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFbo);
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) ok = false;
@@ -579,6 +827,24 @@ export class Renderer {
         const t = tex(w, h), f = fboFor(t);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) ok = false;
         this.bloom.push({ tex: t, fbo: f, w, h });
+      }
+      if (depthTex) {
+        let fxok = true, depthFbo = null;
+        if (this.msFbo) {
+          depthFbo = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, depthFbo); R.fbo.push(depthFbo);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTex, 0);
+          gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) fxok = false;
+        }
+        const full = !!(this.Q && this.Q.fxFull), hw = full ? W : Math.max(1, W >> 1), hh = full ? H : Math.max(1, H >> 1);
+        const vw = Math.max(1, W >> 1), vh = Math.max(1, H >> 1), tv = tex(vw, vh), fv = fboFor(tv);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) fxok = false;
+        const ta = tex(hw, hh), fa = fboFor(ta);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) fxok = false;
+        const tb = tex(hw, hh), fb = fboFor(tb);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) fxok = false;
+        this.fxRes = fxok ? { depthTex, depthFbo, a: { tex: ta, fbo: fa, w: hw, h: hh }, b: { tex: tb, fbo: fb, w: hw, h: hh }, v: { tex: tv, fbo: fv, w: vw, h: vh } } : null;
+        if (!fxok) console.warn('[HINODE] ultra effect buffers incomplete; ultra effects off');
       }
     } catch (e) { ok = false; console.warn('[HINODE] post buffers failed: ' + e.message); }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -651,7 +917,8 @@ export class Renderer {
   }
 
   resize() {
-    const dpr = Math.min(Math.min(window.devicePixelRatio || 1, 2) * this.scale, 2.5);
+    let dpr = Math.min(Math.min(window.devicePixelRatio || 1, 2) * this.scale * (this.resMul || 1), 3);
+    dpr = Math.min(dpr, Math.sqrt(36e6 / Math.max(1, this.canvas.clientWidth * this.canvas.clientHeight)));
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
@@ -661,6 +928,7 @@ export class Renderer {
   // cam: { pos:[x,y,z], target:[x,y,z], fov }; env: lighting state from the sky/time system.
   begin(cam, env) {
     const aspect = this.resize();
+    this.gpuBegin();
     perspective(this.proj, cam.fov, aspect, 0.1, 900);
     lookAt(this.view, cam.pos[0], cam.pos[1], cam.pos[2], cam.target[0], cam.target[1], cam.target[2]);
     multiply(this.vp, this.proj, this.view);
@@ -763,7 +1031,7 @@ export class Renderer {
     const w = this.world;
     gl.useProgram(w.p);
     gl.uniformMatrix4fv(w.u.uVP, false, this.vp);
-    gl.uniform3fv(w.u.uCam, cam.pos);
+    gl.uniform3fv(w.u.uCam, cam.pos); this.fxCam = cam.pos;
     gl.uniform3fv(w.u.uSunDir, env.sunDir);
     gl.uniform3fv(w.u.uSunCol, env.sunCol);
     gl.uniform3fv(w.u.uSkyCol, env.sky);
@@ -790,6 +1058,20 @@ export class Renderer {
       gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
       gl.uniform1i(w.u.uShadow, 0);
     }
+    // Ultra soft shadows read the same depth map raw (no compare) through a sampler object on unit 7.
+    if (!this.rawSampler) {
+      const s = this.rawSampler = gl.createSampler();
+      gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.samplerParameteri(s, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.samplerParameteri(s, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.samplerParameteri(s, gl.TEXTURE_COMPARE_MODE, gl.NONE);
+    }
+    const pcss = !!(this.shadowOK && this.Q && this.Q.pcss);
+    gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, pcss ? this.shadowTex : null); gl.bindSampler(7, this.rawSampler);
+    if (w.u.uShadowRaw) gl.uniform1i(w.u.uShadowRaw, 7);
+    if (w.u.uPcss) gl.uniform1f(w.u.uPcss, pcss ? 1 : 0);
+    if (w.u.uShadowRange) gl.uniform1f(w.u.uShadowRange, 279);
+    if (w.u.uShadowWorld) gl.uniform1f(w.u.uShadowWorld, 92 / SHADOW_SIZE);
+    gl.activeTexture(gl.TEXTURE0);
     for (let i = 0; i < this.n; i++) {
       const mesh = this.qMesh[i];
       gl.uniformMatrix4fv(w.u.uModel, false, this.qModel[i]);
@@ -815,6 +1097,31 @@ export class Renderer {
     }
     gl.bindVertexArray(null);
     if (post) this.postProcess(W, Hh, env);
+    this.gpuEnd();
+  }
+
+  // GPU frame time via EXT_disjoint_timer_query_webgl2 (shown in the FPS counter when the browser exposes it).
+  gpuBegin() {
+    const gl = this.gl;
+    if (this.tq === undefined) { try { this.tq = gl.getExtension('EXT_disjoint_timer_query_webgl2') || null; } catch (e) { this.tq = null; } this.qs = []; }
+    const X = this.tq; if (!X) return;
+    if (this.qOn) { gl.endQuery(X.TIME_ELAPSED_EXT); this.qOn = false; gl.deleteQuery(this.qs.pop()); }
+    this.gpuPoll();
+    if (this.qs.length < 5) { const q = gl.createQuery(); gl.beginQuery(X.TIME_ELAPSED_EXT, q); this.qs.push(q); this.qOn = true; }
+  }
+
+  gpuEnd() { if (this.qOn && this.tq) { this.gl.endQuery(this.tq.TIME_ELAPSED_EXT); this.qOn = false; } }
+
+  gpuPoll() {
+    const gl = this.gl, X = this.tq;
+    const disj = gl.getParameter(X.GPU_DISJOINT_EXT);
+    while (this.qs.length) {
+      const q = this.qs[0];
+      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+      const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
+      gl.deleteQuery(q); this.qs.shift();
+      if (!disj && ns > 0) { const ms = ns / 1e6; this.gpuMs = this.gpuMs ? this.gpuMs * 0.92 + ms * 0.08 : ms; }
+    }
   }
 
   // Bloom chain + final composite to the screen.
@@ -824,6 +1131,12 @@ export class Renderer {
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msFbo);
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.sceneFbo);
       gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    }
+    const FX = this.fxRes && this.fxP && this.Q && this.Q.fx && this.fxOn !== false ? this.fxRes : null;
+    if (FX && this.msFbo) {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msFbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, FX.depthFbo);
+      gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
     }
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.depthMask(false);
     gl.bindVertexArray(this.skyVao);
@@ -841,6 +1154,68 @@ export class Renderer {
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     for (let i = L - 1; i > 0; i--) { pass(P.up, B[i - 1], B[i].tex, B[i].w, B[i].h); gl.drawArrays(gl.TRIANGLES, 0, 3); }
     gl.disable(gl.BLEND);
+    let sx = 0, sy = 0, sk = 0;
+    if (FX) {
+      const X = this.fxP.fx;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, FX.a.fbo); gl.viewport(0, 0, FX.a.w, FX.a.h);
+      gl.useProgram(X.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, FX.depthTex); gl.uniform1i(X.u.uDepth, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.sceneTex); gl.uniform1i(X.u.uScene, 1);
+      gl.uniformMatrix4fv(X.u.uVP, false, this.vp); gl.uniformMatrix4fv(X.u.uInvVP, false, this.inv);
+      gl.uniform3fv(X.u.uCam, this.fxCam || [0, 0, 0]);
+      gl.uniform2f(X.u.uTexel, 1 / W, 1 / H);
+      gl.uniform1f(X.u.uWet, env.wet || 0); gl.uniform1f(X.u.uTime, env.time || 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const Bp = this.fxP.blur;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, FX.b.fbo);
+      gl.useProgram(Bp.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, FX.a.tex); gl.uniform1i(Bp.u.uSrc, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, FX.depthTex); gl.uniform1i(Bp.u.uDepth, 1);
+      gl.uniform2f(Bp.u.uTexel, 1 / FX.a.w, 1 / FX.a.h);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+      const d = env.sunDir, m = this.vp, c = this.fxCam || [0, 0, 0];
+      if (d && d[1] > -0.02) {
+        const px = c[0] + d[0] * 400, py = c[1] + d[1] * 400, pz = c[2] + d[2] * 400;
+        const cx = m[0] * px + m[4] * py + m[8] * pz + m[12], cy = m[1] * px + m[5] * py + m[9] * pz + m[13];
+        const cw = m[3] * px + m[7] * py + m[11] * pz + m[15];
+        if (cw > 0) {
+          sx = (cx / cw) * 0.5 + 0.5; sy = (cy / cw) * 0.5 + 0.5;
+          const out = Math.max(0, Math.max(Math.abs(sx - 0.5), Math.abs(sy - 0.5)) - 0.5);
+          sk = Math.max(0, 1 - out * 2.2) * Math.min(1, (d[1] + 0.02) * 8) * (1 - (env.night || 0)) * (1 - 0.7 * Math.min(1, env.rain || 0));
+        }
+      }
+    }
+    let volOn = false;
+    if (FX && FX.v && this.fxP.vol && this.Q && this.Q.vol) {
+      const Vp = this.fxP.vol, sd = env.sunDir || [0, 1, 0], night = env.night || 0, rain = Math.min(1, env.rain || 0);
+      const sunK = Math.max(0, Math.min(1, (sd[1] + 0.02) / 0.12)) * (1 - night) * (1 - 0.55 * rain);
+      const lampK = night * (0.018 + 0.03 * rain) * (this.volLamp ?? 1);
+      if (sunK > 0.001 || lampK > 0.001) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, FX.v.fbo); gl.viewport(0, 0, FX.v.w, FX.v.h);
+        gl.useProgram(Vp.p);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, FX.depthTex); gl.uniform1i(Vp.u.uDepth, 0);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.shadowOK ? this.shadowTex : null); gl.uniform1i(Vp.u.uShadow, 1);
+        gl.uniformMatrix4fv(Vp.u.uInvVP, false, this.inv);
+        gl.uniformMatrix4fv(Vp.u.uLightVP, false, this.lVP);
+        gl.uniform3fv(Vp.u.uCam, this.fxCam || [0, 0, 0]);
+        gl.uniform3fv(Vp.u.uSunDir, sd);
+        gl.uniform3fv(Vp.u.uSunCol, env.sunCol || [1, 0.9, 0.8]);
+        gl.uniform1f(Vp.u.uSunK, sunK);
+        gl.uniform1f(Vp.u.uLampK, lampK);
+        gl.uniform1f(Vp.u.uDens, (0.0032 + 0.0065 * rain + 0.004 * Math.max(0, 1 - sd[1] * 4)) * (this.volDens ?? 1));
+        gl.uniform1f(Vp.u.uShadowOn, this.shadowOK ? 1 : 0);
+        const uL = Vp.u.uLamps || Vp.u['uLamps[0]'], uC = Vp.u.uLampC || Vp.u['uLampC[0]'];
+        if (uL) gl.uniform4fv(uL, env.lampBuf || this.noLamps || (this.noLamps = new Float32Array(64)));
+        if (uC) gl.uniform3fv(uC, env.lampColBuf || this.noLampC || (this.noLampC = new Float32Array(48)));
+        if (Vp.u.uLampN) gl.uniform1i(Vp.u.uLampN, 16);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+        volOn = true;
+      }
+    }
+    this.volOn = volOn;
+    this.fxStats = { on: !!FX, sun: [sx, sy, sk], samples: this.samples };
     // Composite: scene + bloom -> ACES -> grade -> vignette -> dither.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H);
     const f = P.final; gl.useProgram(f.p);
@@ -850,7 +1225,18 @@ export class Renderer {
     gl.uniform1f(f.u.uVig, env.vignette ?? 0.3);
     gl.uniform2f(f.u.uRes, W, H);
     gl.uniform1f(f.u.uTime, env.time);
+    gl.uniform1f(f.u.uUltra, FX ? 1 : 0);
+    if (f.u.uVolOn) gl.uniform1f(f.u.uVolOn, volOn ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, volOn ? FX.v.tex : null); if (f.u.uVol) gl.uniform1i(f.u.uVol, 4); gl.activeTexture(gl.TEXTURE1);
+    if (FX) {
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, FX.b.tex); gl.uniform1i(f.u.uFx, 2);
+      gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, FX.depthTex); gl.uniform1i(f.u.uDepth, 3);
+      gl.uniform3f(f.u.uSun, sx, sy, sk);
+      gl.uniform3fv(f.u.uSunCol, env.sunCol || [1, 0.9, 0.8]);
+    } else { gl.uniform1i(f.u.uFx, 1); gl.uniform1i(f.u.uDepth, 1); }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE1);
+    if (FX) { gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE1); }
     // Unbind so next frame's scene pass never samples a texture it's rendering into.
     gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
     gl.bindVertexArray(null);

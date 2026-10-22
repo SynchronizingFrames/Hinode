@@ -138,3 +138,6 @@
 .talk kbd { display: inline-block; min-width: 18px; padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; font: 700 10px/1.3 var(--mono, monospace); text-align: center; opacity: .75; }
 .talk footer { display: flex; gap: 14px; font-size: 11px; opacity: .55; }
 @media (max-width: 560px) { .talk .opts { grid-template-columns: 1fr; } }
+.talk-x { margin-left: 6px; width: 26px; height: 26px; padding: 0; border: 0; background: transparent; color: inherit; font: 400 16px/1 var(--font); opacity: .5; cursor: pointer; align-self: center; }
+.talk-x:hover { opacity: 1; }
+@media (max-height: 560px) { .panel .sheet { max-height: 96vh; max-height: 96dvh; overflow-y: auto; } .board .sheet, .journal .sheet { zoom: .82; } }

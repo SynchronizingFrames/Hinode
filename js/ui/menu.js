@@ -3,26 +3,29 @@
 import { el, esc, yen } from './dom.js';
 
 const SKEY = 'hinode.settings';
-export const DEFAULTS = { sens: 1, invertY: false, showFps: false, reduceMotion: false, fpv: false, quality: 'high', fov: 65 };
+export const DEFAULTS = { volume: 0.8, sens: 1, invertY: false, showFps: false, reduceMotion: false, fpv: false, quality: 'high', fov: 65, res: 1 };
 export function loadSettings(st) {
   let s;
   try { s = { ...DEFAULTS, ...(JSON.parse(st && st.getItem(SKEY)) || {}) }; } catch { s = { ...DEFAULTS }; }
   if (!QUALITY_INFO[s.quality]) s.quality = DEFAULTS.quality;
   s.fov = Math.min(100, Math.max(50, +s.fov || DEFAULTS.fov));
+  s.res = Math.min(2, Math.max(0.5, +s.res || 1));
+  s.volume = s.volume != null && Number.isFinite(+s.volume) ? Math.min(1, Math.max(0, +s.volume)) : DEFAULTS.volume;
   return s;
 }
+export const hasSavedSettings = (st) => { try { return !!(st && st.getItem(SKEY)); } catch { return false; } };
 export function saveSettings(st, s) { try { if (st) st.setItem(SKEY, JSON.stringify(s)); } catch { /* storage full or blocked */ } }
 
 export const QUALITY_INFO = {
   low: { jp: '低', name: 'Low', desc: '70% resolution, no bloom. For laptops and older GPUs.' },
   medium: { jp: '中', name: 'Medium', desc: '85% resolution, HDR bloom, 2K shadows.' },
   high: { jp: '高', name: 'High', desc: 'Native resolution, HDR bloom, 2K shadows. The default.' },
-  ultra: { jp: '極', name: 'Ultra', desc: '150% supersampled, 4K shadows, longest draw distance, dense rain. For strong GPUs (RTX 30-series and up).' },
+  ultra: { jp: '極', name: 'Ultra', desc: 'Everything maxed: 200% supersampling, MSAA, 8K soft contact-hardening shadows, volumetric sunlight and lamp glow in the fog, full-res ambient occlusion, long-range wet reflections, 600 m draw distance and the biggest crowds. Built to push an RTX 50-series. Lower Resolution boost to trade sharpness for frame rate.' },
 };
 
 const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
 const hhmm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
-const sign = (act, jp, en, sub = '', extra = '') => `<button type="button" class="m-sign${extra}" data-act="${act}"><span class="jp">${jp}</span><b>${esc(en)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
+const sign = (act, jp, en, sub = '', extra = '') => `<button type="button" class="m-sign${extra}" data-act="${act}"><span class="jp"><span class="roll" data-t="${jp}">${jp}</span></span><b>${esc(en)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
 const chars = (s, cls) => [...s].map((c, i) => `<i class="${cls}" style="--i:${i}">${c}</i>`).join('');
 const petals = (n) => Array.from({ length: n }, (_, i) => {
   const x = (i * 37.3) % 100, d = 9 + ((i * 7.1) % 9), dl = -((i * 3.7) % 18), s = 0.6 + ((i * 0.37) % 0.8), sw = 30 + ((i * 13) % 70);
@@ -50,6 +53,14 @@ export class Menu {
     this.screen = null; this.info = null; this.armed = null;
     this.el.addEventListener('click', (e) => this.click(e));
     this.el.addEventListener('input', (e) => this.change(e));
+    // Hover feel: tilt + spotlight on signs, a sliding line marker, ripples, parallax, soft UI sounds.
+    this.sfx = null; this.hot = null; this.raf = 0;
+    this.el.addEventListener('pointermove', (e) => this.move(e));
+    this.el.addEventListener('pointerover', (e) => this.over(e));
+    this.el.addEventListener('pointerout', (e) => this.out(e));
+    this.el.addEventListener('focusin', (e) => this.over(e));
+    this.el.addEventListener('focusout', (e) => this.out(e));
+    this.el.addEventListener('pointerdown', (e) => this.press(e));
   }
 
   show(screen, info = this.info) {
@@ -86,10 +97,73 @@ export class Menu {
       this.list.innerHTML = `<div class="m-form m-credits"><p><b>HINODE: Last-Mile Japan</b></p><p>Design, code, art and words made for cam.</p>
         <p>Everything you see is built in code: procedural models, shaders, weather and lighting. No downloaded assets.</p><p>Aoshima, its people and its shops are fictional.</p></div>` + sign('back', '戻る', 'Back');
     }
+    this.decorate();
+  }
+
+  decorate() {
+    this.hot = null; this.list.classList.remove('hot'); this.el.classList.remove('hot');
+    [...this.list.children].forEach((c, n) => c.style.setProperty('--i', n));
+    this.list.insertAdjacentHTML('beforeend', '<i class="m-hl" aria-hidden="true"></i>');
+    this.list.querySelectorAll('input[type=range]').forEach((r) => this.fill(r));
+  }
+  fill(r) { r.style.setProperty('--p', (((r.value - r.min) / ((r.max - r.min) || 1)) * 100).toFixed(1) + '%'); }
+  calm() { return document.body.classList.contains('reduce-motion') || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); }
+
+  move(e) {
+    if (e.pointerType === 'touch' || this.calm()) return;
+    this.mx = e.clientX; this.my = e.clientY; this.mt = e.target;
+    if (this.raf) return;
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0;
+      const W = innerWidth || 1, H = innerHeight || 1;
+      this.el.style.setProperty('--px', ((this.mx / W) * 2 - 1).toFixed(3));
+      this.el.style.setProperty('--py', ((this.my / H) * 2 - 1).toFixed(3));
+      const b = this.mt && this.mt.closest && this.mt.closest('.m-sign');
+      if (!b) return;
+      const r = b.getBoundingClientRect(), x = (this.mx - r.left) / (r.width || 1), y = (this.my - r.top) / (r.height || 1);
+      b.style.setProperty('--mx', (x * 100).toFixed(1) + '%'); b.style.setProperty('--my', (y * 100).toFixed(1) + '%');
+      b.style.setProperty('--rx', ((x - 0.5) * 7).toFixed(2) + 'deg'); b.style.setProperty('--ry', ((0.5 - y) * 10).toFixed(2) + 'deg');
+    });
+  }
+  over(e) {
+    const t = e.target.closest && e.target.closest('.m-sign, .m-tab, .m-q');
+    if (!t || t === this.hot) return;
+    this.hot = t;
+    if (this.sfx) this.sfx('hover');
+    if (t.classList.contains('m-sign')) this.glide(t);
+  }
+  out(e) {
+    const t = e.target.closest && e.target.closest('.m-sign, .m-tab, .m-q');
+    const to = e.relatedTarget;
+    if (!t || (to && t.contains(to))) return;
+    if (t.classList.contains('m-sign')) { t.style.setProperty('--rx', '0deg'); t.style.setProperty('--ry', '0deg'); }
+    if (this.hot === t) this.hot = null;
+    if (!to || !to.closest || !to.closest('.m-sign')) { this.list.classList.remove('hot'); this.el.classList.remove('hot'); }
+  }
+  glide(b) {
+    const hl = this.list.querySelector('.m-hl');
+    if (!hl || b.parentElement !== this.list) return;
+    const was = this.list.classList.contains('hot');
+    if (!was) hl.classList.add('snap');
+    hl.style.setProperty('--hl-y', b.offsetTop + 'px'); hl.style.setProperty('--hl-h', b.offsetHeight + 'px');
+    if (!was) { void hl.offsetWidth; hl.classList.remove('snap'); }
+    this.list.classList.add('hot'); this.el.classList.add('hot');
+  }
+  press(e) {
+    const b = e.target.closest && e.target.closest('.m-sign, .m-q');
+    if (!b) return;
+    if (this.sfx) this.sfx('press');
+    if (this.calm()) return;
+    const r = b.getBoundingClientRect(), i = document.createElement('i');
+    i.className = 'm-rip'; i.style.left = (e.clientX - r.left) + 'px'; i.style.top = (e.clientY - r.top) + 'px';
+    b.append(i); setTimeout(() => i.remove(), 800);
   }
 
   settingsForm() {
     const st = this.settings, t = this.tab;
+    const order = ['controls', 'graphics', 'comfort', 'sound'], to = Math.max(0, order.indexOf(t)), from = this.tabPrev ? Math.max(0, order.indexOf(this.tabPrev)) : to;
+    this.tabPrev = null;
+    const dir = to > from ? ' r' : to < from ? ' l' : '';
     const tab = (id, jp, en) => `<button type="button" class="m-tab${t === id ? ' on' : ''}" data-tab="${id}"><span>${jp}</span>${en}</button>`;
     const chk = (k, label, sub = '') => `<label class="chk"><input type="checkbox" data-set="${k}"${st[k] ? ' checked' : ''}><span>${label}${sub ? `<em>${sub}</em>` : ''}</span></label>`;
     let body = '';
@@ -102,19 +176,23 @@ export class Menu {
       body = `<div class="m-qset" role="radiogroup" aria-label="Graphics quality">${Object.entries(QUALITY_INFO).map(([id, v]) =>
         `<button type="button" role="radio" aria-checked="${id === q}" class="m-q${id === q ? ' on' : ''}${id === 'ultra' ? ' ultra' : ''}" data-q="${id}"><span>${v.jp}</span>${v.name}</button>`).join('')}</div>
         <p class="m-qdesc">${esc(Q.desc)}</p>
+        <label><span>Resolution boost <output>${Math.round(st.res * 100)}%</output></span><input type="range" min="0.5" max="2" step="0.05" value="${st.res}" data-set="res"></label>
         <label><span>Field of view <output>${Math.round(st.fov)}°</output></span><input type="range" min="50" max="100" step="1" value="${st.fov}" data-set="fov"></label>
         ${chk('showFps', 'Show frame rate (F3)')}`;
+    } else if (t === 'sound') {
+      body = `<label><span>Master volume <output>${Math.round(st.volume * 100)}%</output></span><input type="range" min="0" max="1" step="0.05" value="${st.volume}" data-set="volume"></label>
+        <p class="m-qdesc">Every sound is made live in the browser: engine and tyres, rain, footsteps, birds and insects, the Shinjuku crossing chime. Press H in the car to honk.</p>`;
     } else {
       body = `${chk('reduceMotion', 'Reduce motion', 'Less camera sway, no head bob, calmer menus.')}`;
     }
-    return `<div class="m-form m-set"><div class="m-tabs">${tab('controls', '操作', 'Controls')}${tab('graphics', '画質', 'Graphics')}${tab('comfort', '快適', 'Comfort')}</div><div class="m-body">${body}</div></div>`;
+    return `<div class="m-form m-set"><div class="m-tabs">${tab('controls', '操作', 'Controls')}${tab('graphics', '画質', 'Graphics')}${tab('comfort', '快適', 'Comfort')}${tab('sound', '音', 'Sound')}<i class="m-tabbar" style="--from:${from};--to:${to}"></i></div><div class="m-body${dir}">${body}</div></div>`;
   }
 
   click(e) {
     const tb = e.target.closest('[data-tab]');
-    if (tb) { this.tab = tb.dataset.tab; this.render(); return; }
+    if (tb) { if (tb.dataset.tab !== this.tab) { this.tabPrev = this.tab; this.tab = tb.dataset.tab; if (this.sfx) this.sfx('tab'); this.render(); } return; }
     const qb = e.target.closest('[data-q]');
-    if (qb) { this.settings.quality = qb.dataset.q; this.onSetting('quality', qb.dataset.q); this.render(); return; }
+    if (qb) { if (this.sfx && qb.dataset.q !== this.settings.quality) this.sfx('select'); this.settings.quality = qb.dataset.q; this.onSetting('quality', qb.dataset.q); this.render(); return; }
     const b = e.target.closest('[data-act]'); if (!b) return;
     const a = b.dataset.act, A = this.actions;
     if (a === 'settings' || a === 'credits') { this.prev = this.screen; this.show(a); return; }
@@ -138,9 +216,12 @@ export class Menu {
     const k = e.target.dataset.set; if (!k) return;
     const v = e.target.type === 'checkbox' ? e.target.checked : parseFloat(e.target.value);
     this.settings[k] = v;
+    if (e.target.type === 'range') this.fill(e.target);
     const out = e.target.parentElement.querySelector('output');
     if (k === 'sens' && out) out.textContent = v.toFixed(2) + '×';
     if (k === 'fov' && out) out.textContent = Math.round(v) + '°';
+    if (k === 'volume' && out) out.textContent = Math.round(v * 100) + '%';
+    if (k === 'res' && out) out.textContent = Math.round(v * 100) + '%';
     this.onSetting(k, v);
   }
 }

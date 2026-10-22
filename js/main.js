@@ -12,15 +12,18 @@ import { Jobs } from './game/jobs.js';
 import { Interact } from './game/interact.js';
 import { Npcs } from './game/npcs.js';
 import { Talk } from './ui/talk.js';
+import { TouchControls } from './ui/touch.js';
 import { Car } from './game/car.js';
 import { Traffic } from './game/traffic.js';
+import { Crowd } from './game/crowd.js';
+import { GameAudio } from './game/audio.js';
 import { Hud } from './ui/hud.js';
 import { Board } from './ui/board.js';
 import { Journal } from './ui/journal.js';
 import { Summary } from './ui/summary.js';
 import { yen } from './ui/dom.js';
 import { SaveStore, snapshot, apply, describe, browserStorage } from './game/save.js';
-import { Menu, loadSettings, saveSettings } from './ui/menu.js';
+import { Menu, loadSettings, saveSettings, hasSavedSettings } from './ui/menu.js';
 import { Cinematic } from './ui/cinematic.js';
 
 const $ = (id) => document.getElementById(id);
@@ -77,21 +80,26 @@ async function boot() {
   const jobs = new Jobs({ world, clock, career });
   const interact = new Interact(world, jobs);
   const npcs = new Npcs(r, world);
-  const talk = new Talk(document.body, { onClose: () => setMode('play') });
+  let talkWith = null; // the resident you're chatting with; you can keep walking while you talk
+  const talk = new Talk(document.body, { onClose: () => { talkWith = null; } });
   const car = new Car(r, world, { at: [1.6, -9, Math.PI] });
   const traffic = new Traffic(r, world);
+  const crowd = new Crowd(r, world); traffic.crowd = crowd;
+  const audio = new GameAudio();
   const weather = new Weather();
   if (params.get('weather')) weather.force(params.get('weather')); // ?weather=rain | storm | clear
   const cine = new Cinematic(world);
   const openTalk = (n) => {
     const cv = npcs.conversation(n, { clock, career, jobs, open: jobs.board().length });
-    setMode('talk');
+    talkWith = n;
     talk.start(cv.who, cv.node);
   };
   const markers = new Markers(r);
   const hud = new Hud($('hud'), { jobs, career, clock });
+  const touch = new TouchControls(document.body, input, { hint: $('hint'), force: params.has('touch') });
   const store = new SaveStore(browserStorage());
   const settings = loadSettings(store.s);
+  if (touch.on && !hasSavedSettings(store.s)) settings.quality = 'medium'; // phones start on a preset they can hold
   const applySetting = (k, v) => {
     if (k === 'sens') cam.sens = v;
     else if (k === 'invertY') cam.invertY = v;
@@ -99,6 +107,8 @@ async function boot() {
     else if (k === 'showFps') $('fps').hidden = !v;
     else if (k === 'fpv') { cam.fpv = !!v; cam.focus = null; cam.eyeY = null; }
     else if (k === 'quality') r.setQuality(v);
+    else if (k === 'res') r.resMul = +v || 1;
+    else if (k === 'volume') audio.setVolume(v);
     else if (k === 'fov') { cam.fov = v * Math.PI / 180; if (car.baseFov != null) car.baseFov = cam.fov; }
     saveSettings(store.s, settings);
   };
@@ -106,7 +116,8 @@ async function boot() {
   const ui = { mode: TEST && !params.has('title') ? 'play' : 'title', saved: 0, dirty: false, autosave: 0 };
 
   const setMode = (m, data) => {
-    board.hide(); journal.hide(); summary.hide(); menu.hide(); talk.hide();
+    board.hide(); journal.hide(); summary.hide(); menu.hide(); talk.hide(); talkWith = null;
+    if (m !== 'play') touch.reset();
     car.hud.el.hidden = !(m === 'play' && car.driving);
     if (m === 'title') { if (!cine.active) cine.start(weather); }
     else if (cine.active) cine.stop(weather, params.get('weather'));
@@ -164,6 +175,8 @@ async function boot() {
       quit: () => { doSave(); location.reload(); },
     },
   });
+  jobs.on((type) => audio.event(type));
+  menu.sfx = (k) => audio.ui(k);
   jobs.on((type) => { if (type === 'accepted' || type === 'collected' || type === 'delivered' || type === 'failed' || type === 'cancelled') ui.dirty = true; });
   addEventListener('pagehide', () => doSave());
   document.addEventListener('visibilitychange', () => { if (document.hidden) doSave(); });
@@ -224,7 +237,16 @@ async function boot() {
         }
       }
       traffic.update(dt, car, player);
+      crowd.update(dt, player, car, weather);
       npcs.update(dt, player, clock);
+      // Conversations are an overlay: keep walking and looking while you talk. Walk off and it ends.
+      const talking = talk.open;
+      if (talking) {
+        talk.update(dt, input);
+        if (talkWith && (!talkWith.out || Math.hypot(player.pos[0] - talkWith.x, player.pos[2] - talkWith.z) > 7)) {
+          const who = talkWith.c.name; talk.close(); hud.toast('Conversation over', `You walked away from ${who}.`, '', 1500);
+        }
+      }
       let p;
       if (car.driving) p = interact.current = car.exitPrompt(() => car.exit(player, cam));
       else {
@@ -232,13 +254,15 @@ async function boot() {
         if (!p || p.passive) { const tp = npcs.probe(player.pos[0], player.pos[2], openTalk); if (tp) p = interact.current = tp; }
         if (!p || p.passive) { const cp = car.probe(player.pos[0], player.pos[2], () => car.enter(player, cam)); if (cp) p = interact.current = cp; }
       }
-      if (p && input.hit('KeyE')) { if (p.board) setMode('board'); else if (p.act) p.act(); }
+      if (talking) p = interact.current = null;
+      else if (p && input.hit('KeyE')) { if (p.board) setMode('board'); else if (p.act) p.act(); }
       else if (input.hit('Tab')) setMode('journal');
       else if ((input.tap('Escape') && !input.locked) || input.hit('KeyP')) setMode('pause', { saved: ui.saved });
       if (ui.mode === 'play' && input.hit('KeyV')) {
         settings.fpv = !settings.fpv; applySetting('fpv', settings.fpv);
         hud.toast(settings.fpv ? 'First-person view' : 'Third-person view', 'Press V to switch.', '', 1600);
       }
+      touch.update(p, talk.open, car.driving);
       if (ui.mode === 'play') cam.update(dt, input, car.driving ? car.camTarget : player, world.collision, car.driving ? car : null);
       ui.autosave += dt;
       if (ui.mode === 'play' && ((ui.dirty && ui.autosave > 1.5) || ui.autosave > 30)) doSave();
@@ -265,7 +289,7 @@ async function boot() {
 
   // Test hook: tests pause the live loop and advance the simulation in exact 1/60 s steps,
   // so results don't depend on how fast the (software) test GPU renders.
-  if (TEST) window.__HINODE__ = {
+  if (TEST) window.__HINODE__ = { touch, crowd, audio,
     weather, cine,
     r, world, input, cam, player, state, env: ENV, npcs, talk, car, traffic, clock, career, jobs, interact, hud, board, journal, summary, goals,
     ui: { get mode() { return ui.mode; }, setMode, endDay }, menu, store, save: doSave, settings,
@@ -282,6 +306,7 @@ async function boot() {
       if (input.hit('F3')) fps.hidden = !fps.hidden;
       if (input.hit('Escape')) input.releaseLock();
       if (!state.paused) tick(dt);
+      audio.update(dt, { car, player, input, weather, clock, crowd, mode: ui.mode, paused: state.paused });
 
       applyTimeOfDay(ENV, ui.mode === 'title' && cine.active ? cine.min : clock.min);
       weather.apply(ENV);
@@ -305,6 +330,7 @@ async function boot() {
       npcs.draw(r, cam, t);
       car.draw(r, cam, t, ENV);
       traffic.draw(r, cam);
+      crowd.draw(r, cam);
       if (cam.distNow > 0.55 && !car.driving) player.draw(r, t); // hide the rider when the camera is squeezed into their head
       r.end();
       state.visible = vis;
@@ -312,7 +338,7 @@ async function boot() {
 
       moved += player.speed * dt;
       if (moved > 25 && !hint.classList.contains('fade')) { hintTimer += dt; if (hintTimer > 4) hint.classList.add('fade'); }
-      if (!fps.hidden && state.frames % 15 === 0) fps.textContent = `${(1000 / state.avg).toFixed(0)} fps · ${r.stats.draws} draws · ${(r.stats.tris / 1000).toFixed(0)}k tris`;
+      if (!fps.hidden && state.frames % 15 === 0) fps.textContent = `${(1000 / state.avg).toFixed(0)} fps${r.gpuMs ? ` · GPU ${r.gpuMs.toFixed(2)} ms ≈ ${Math.round(1000 / r.gpuMs)} fps max` : ''} · ${r.stats.draws} draws · ${(r.stats.tris / 1000).toFixed(0)}k tris`;
       state.frames++;
     } catch (e) {
       fail('The game hit an error and stopped: ' + e.message);

@@ -109,7 +109,7 @@ export class Car {
     const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw), t = this.tmp;
     for (let pass = 0; pass < 2; pass++) for (const o of BODY) { // 2 passes: corners where two walls meet
       const cx = this.x + sy * o, cz = this.z + cy * o;
-      this.col.resolve([cx, 0, cz], RAD, 0.25, 1.2, t);
+      this.col.resolve([cx, 0, cz], RAD, 0.25, 1.2, t, 'walk');   // Tokyo kerbs: the car can't mount the pavement
       const dx = t.x - cx, dz = t.z - cz, d = Math.hypot(dx, dz);
       if (d > 1e-4) this.hit(dx / d, dz / d, dx, dz);
       for (const b of obs) {

@@ -7,7 +7,7 @@ const KEY = 'hinode.npc', TALK_R = 1.9, BODY_R = 0.55;
 const part = (fn) => { const b = new Builder(); fn(b); return b; };
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
 
-function buildPerson(L) {
+export function buildPerson(L) {
   const top = hex(L.top), bot = hex(L.bottom), skin = hex(L.skin), hair = hex(L.hair), eye = hex('#201814'), shoe = hex('#3b342e');
   return {
     hips: part((b) => b.box(0, 0, 0, 0.36, 0.2, 0.22, bot, { ao: 1 })),

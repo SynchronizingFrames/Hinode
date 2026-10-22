@@ -1,5 +1,6 @@
 // Conversation box: who you're talking to, their line typed out, numbered replies.
-// Keys: 1-4 pick a reply, E / Space / Enter skip or continue, Esc leaves.
+// Keys: 1-4 pick a reply, E / Enter (or a tap on the card) skip or continue, Esc or the cross leaves.
+// It is an overlay: the player keeps walking and looking around while it is open (Space stays jump).
 const KEYS = ['Digit1', 'Digit2', 'Digit3', 'Digit4'];
 
 export class Talk {
@@ -8,14 +9,20 @@ export class Talk {
     const e = (this.el = document.createElement('div'));
     e.className = 'talk';
     e.hidden = true;
-    e.innerHTML = '<div class="talk-card"><header><span class="jp"></span><span class="nm"></span><span class="role"></span><span class="bond"></span></header>'
+    e.innerHTML = '<div class="talk-card"><header><span class="jp"></span><span class="nm"></span><span class="role"></span><span class="bond"></span><button type="button" class="talk-x" aria-label="Leave conversation">✕</button></header>'
       + '<p class="line"></p><ol class="opts"></ol>'
-      + '<footer><span><kbd>E</kbd> continue</span><span><kbd>1</kbd>–<kbd>4</kbd> reply</span><span><kbd>Esc</kbd> leave</span></footer></div>';
+      + '<footer><span class="k"><kbd>E</kbd> continue</span><span class="k"><kbd>1</kbd>–<kbd>4</kbd> reply</span><span class="k"><kbd>Esc</kbd> leave</span><span class="k">walk away to end</span>'
+      + '<span class="tch">Tap the card to continue · tap a reply · ✕ to leave</span></footer></div>';
     root.appendChild(e);
     this.q = (s) => e.querySelector(s);
     this.$line = this.q('.line');
     this.$opts = this.q('.opts');
-    this.text = ''; this.shown = 0; this.opts = []; this.open = false; this.who = null;
+    this.text = ''; this.shown = 0; this.opts = []; this.open = false; this.who = null; this.adv = false;
+    this.q('.talk-card').addEventListener('click', (ev) => {
+      if (ev.target.closest('.opts button')) return;
+      if (ev.target.closest('.talk-x')) { this.close(); return; }
+      this.adv = true;
+    });
   }
 
   show() { this.el.hidden = false; this.open = true; }
@@ -69,7 +76,8 @@ export class Talk {
   update(dt, input) {
     if (!this.open) return;
     if (input.tap('Escape')) return this.close();
-    const adv = input.tap('KeyE') || input.tap('Space') || input.tap('Enter');
+    const adv = this.adv || input.tap('KeyE') || input.tap('Enter');
+    this.adv = false;
     if (this.typing) {
       this.shown = adv ? this.text.length : Math.min(this.text.length, this.shown + dt * 52);
       this.$line.textContent = this.text.slice(0, Math.floor(this.shown));

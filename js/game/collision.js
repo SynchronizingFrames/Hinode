@@ -69,13 +69,13 @@ export class Collision {
   }
 
   // Push a circle out of everything it overlaps. Returns the pushed position and contact info.
-  resolve(pos, r, feetY, height = 1.7, out = { x: 0, z: 0, hit: false, nx: 0, nz: 0, tag: null }) {
+  resolve(pos, r, feetY, height = 1.7, out = { x: 0, z: 0, hit: false, nx: 0, nz: 0, tag: null }, solid = null) {   // solid: a tag that blocks even when low enough to step on (kerbs for the car)
     let x = pos[0], z = pos[2];
     out.hit = false; out.nx = 0; out.nz = 0; out.tag = null;
     for (let iter = 0; iter < 3; iter++) {
       let moved = false;
       for (const it of this.near(x - r - 0.5, z - r - 0.5, x + r + 0.5, z + r + 0.5)) {
-        if (it.y1 <= feetY + STEP || it.y0 >= feetY + height) continue;
+        if ((it.y1 <= feetY + STEP && (solid === null || it.tag !== solid)) || it.y0 >= feetY + height) continue;
         let dx, dz, d;
         if (it.kind === 0) {
           const cx = Math.max(it.x0, Math.min(x, it.x1)), cz = Math.max(it.z0, Math.min(z, it.z1));
