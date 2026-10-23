@@ -1,3 +1,4 @@
+import { STORY_JOBS, JOB_GATES } from './story.js';
 // Delivery content: package types, named residents, authored story jobs, and templates for daily jobs.
 // Places are referenced as 'depot', 'lot:<id>' or 'post:<id>'. Lot ids are `${block i}${block j}${row}${k}`.
 
@@ -54,6 +55,10 @@ export const AUTHORED = [
     note: "Ordered by Nao Fujita, room 101. Delivery note: 'please don't ring twice, the landlord hears everything.'",
     line: "Shh. Thank you. They're not my cats. They're the street's cats. I just... feed the street." },
 ];
+// Story mode: pace the early deliveries into chapters, then add the story's own deliveries.
+for (const a of AUTHORED) if (JOB_GATES[a.id]) a.gate = JOB_GATES[a.id];
+AUTHORED.push(...STORY_JOBS);
+
 
 // Daily job templates by type.
 export const ITEMS = {

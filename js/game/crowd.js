@@ -233,13 +233,18 @@ export class Crowd {
         poseMatrix(this.m, w.x, w.y + 0.002, w.z, 0, s * (1 - bob));
         r.draw(this.shadow, this.m, false);
         poseMatrix(this.root, w.x, w.y + 0.9 * s + bob, w.z, w.yaw, s);
-        L(M.hips, 0, -0.06, 0, 0);
-        L(M.torso, 0, 0.06, 0, 0.04 * sp);
-        L(M.head, 0, 0.62, 0, w.state === 'wait' ? -0.05 : 0.03);
-        L(M.leg, -0.1, 0, 0, sw);
-        L(M.leg, 0.1, 0, 0, -sw);
-        L(M.arm, -0.29, 0.58, 0, -sw * 0.75, 0.06);
-        L(M.arm, 0.29, 0.58, 0, umb ? -1.05 : sw * 0.75, -0.06);
+        // Gait: the swing foot lifts, the pelvis twists and drops with the stride, shoulders counter-rotate,
+        // the head stays level. Standing still (waiting at a crossing) they shift weight and look around.
+        const cp = Math.cos(w.phase), liftL = 0.045 * sp * Math.max(0, -cp), liftR = 0.045 * sp * Math.max(0, cp);
+        const idle = 1 - sp, seed = w.look * 1.7 + w.lx * 0.13, now = performance.now() * 0.001;
+        const ws = idle * Math.sin(now * 0.41 + seed), pr = -0.04 * cp * sp + 0.03 * ws, ty = 0.18 * sw, az = 0.29 * Math.sin(ty);
+        L(M.hips, 0.02 * ws, -0.06, 0, 0, pr, -0.14 * sw);
+        L(M.torso, 0.01 * ws, 0.06, 0, 0.04 * sp + 0.03 * sp * sp, -0.6 * pr, ty);
+        L(M.head, 0.008 * ws, 0.62, 0, w.state === 'wait' ? -0.05 : 0.03, 0, idle * 0.3 * Math.sin(now * 0.23 + seed * 2));
+        L(M.leg, -0.1 + 0.02 * ws, liftL, 0, sw - 0.06 * Math.max(0, ws), -0.023 * ws);
+        L(M.leg, 0.1 + 0.02 * ws, liftR, 0, -sw - 0.06 * Math.max(0, -ws), -0.023 * ws);
+        L(M.arm, -0.29 + 0.01 * ws, 0.58, az, -sw * 0.75, 0.06 - 0.6 * pr, ty);
+        L(M.arm, 0.29 + 0.01 * ws, 0.58, -az, umb ? -1.05 : sw * 0.75, -0.06 - 0.6 * pr, ty);
       }
       if (umb) {
         poseMatrix(this.m, w.x + Math.cos(w.yaw) * 0.05 * s, w.y + 2.02 * s + bob, w.z - Math.sin(w.yaw) * 0.05 * s, w.yaw, s, 0.06, 0);

@@ -13,7 +13,7 @@ function usable(e) {
   const cs = getComputedStyle(e);
   if (cs.visibility === 'hidden' || cs.pointerEvents === 'none') return false;
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-  if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return !!e.closest('.m-form, .board, .journal, .summary, ol, ul');
+  if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return !!e.closest('.m-form, .board, .shop, .dealer, .journal, .summary, ol, ul');
   const hit = document.elementFromPoint(cx, cy);
   return !!hit && (hit === e || e.contains(hit));
 }

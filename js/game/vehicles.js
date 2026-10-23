@@ -140,6 +140,39 @@ const DESIGNS = {
     door: [0.7, -0.22, -1.12], hood: 1.6, trunk: null, handles: [0.0, -0.95], mirrorZ: 0.72, exhaust: [],
     head: [0.84, 0.985, 0.62, 0.8], tail: [-0.997, -0.93, 0.5, 0.82], rim: '#b9bdc2', signZ: -0.3,
   },
+  // Hinode Komachi hatchback: short nose, tall tailgate, roof carried right to the back.
+  hatch: {
+    spec: { axle: 1.25, track: 0.73, r: 0.31, w: 0.22, front: 2.0, rear: -1.95, len: 3.95, wid: 1.7 },
+    W: 0.85, pf: 4, pr: 7, eb: 0.42, et: 0.5, tumble: 0.07, crease: 0.012, flare: [0.02, 0.03],
+    top: [[-1.95, 0.8], [-1.9, 0.92], [-1.6, 0.95], [-0.5, 0.92], [0.6, 0.9], [1.3, 0.84], [1.8, 0.74], [1.97, 0.62], [2.0, 0.5]],
+    bot: [[-1.95, 0.36], [-1.75, 0.21], [-1.5, 0.18], [1.55, 0.17], [1.85, 0.2], [2.0, 0.28]],
+    cab: { z0: -1.86, z1: 0.75, wb: 0.78, taper: 0.14, zB: -0.25, zQ: -1.25, zRT: -1.5,
+      roof: [[-1.86, 0.93], [-1.76, 1.34], [-1.45, 1.49], [-0.3, 1.53], [0.2, 1.48], [0.75, 0.9]] },
+    door: [0.72, -0.25, -1.15], hood: 1.8, trunk: null, handles: [0.0, -0.9], mirrorZ: 0.55, exhaust: [-0.45],
+    head: [0.82, 0.975, 0.6, 0.76], tail: [-0.99, -0.9, 0.62, 0.86], rim: '#2b2d31', signZ: -0.3,
+  },
+  // Hinode Hakobu one-box van: flat face, tall roof, sliding side door.
+  van: {
+    spec: { axle: 1.45, track: 0.73, r: 0.31, w: 0.21, front: 2.35, rear: -2.35, len: 4.7, wid: 1.7 },
+    W: 0.85, pf: 6, pr: 9, eb: 0.32, et: 0.4, tumble: 0.03, crease: 0.006, flare: [0.01, 0.01],
+    top: [[-2.35, 0.98], [-2.3, 1.02], [1.7, 1.0], [2.12, 0.94], [2.3, 0.8], [2.35, 0.62]],
+    bot: [[-2.35, 0.36], [-2.2, 0.22], [2.2, 0.21], [2.35, 0.32]],
+    cab: { z0: -2.32, z1: 2.0, wb: 0.84, taper: 0.06, zB: 0.95, zQ: -0.7, zRT: -2.15,
+      roof: [[-2.32, 1.0], [-2.27, 1.9], [-2.0, 1.98], [1.3, 1.98], [1.72, 1.86], [2.0, 0.98]] },
+    door: [1.6, 0.8, -0.45], hood: 2.22, trunk: null, handles: [0.9, -0.35], mirrorZ: 1.75, exhaust: [-0.5],
+    head: [0.9, 0.99, 0.64, 0.8], tail: [-0.997, -0.96, 0.6, 0.98], rim: '#b9bdc2', signZ: -0.3,
+  },
+  // Hinode Raijin GT: long low hood, set-back cabin, wide hips, quad exhausts.
+  gt: {
+    spec: { axle: 1.4, track: 0.84, r: 0.34, w: 0.3, front: 2.3, rear: -2.25, len: 4.55, wid: 1.92 },
+    W: 0.96, pf: 3.2, pr: 3.8, eb: 0.5, et: 0.65, tumble: 0.12, crease: 0.016, flare: [0.06, 0.1],
+    top: [[-2.25, 0.62], [-2.18, 0.8], [-2.0, 0.9], [-1.5, 0.92], [-0.6, 0.86], [0.5, 0.84], [1.3, 0.84], [1.85, 0.75], [2.18, 0.6], [2.3, 0.46]],
+    bot: [[-2.25, 0.3], [-2.0, 0.17], [-1.6, 0.13], [1.7, 0.12], [2.1, 0.15], [2.3, 0.22]],
+    cab: { z0: -1.55, z1: 0.42, wb: 0.74, taper: 0.28, zB: -0.55, zQ: -1.0, zRT: -0.45,
+      roof: [[-1.55, 0.88], [-1.05, 1.0], [-0.6, 1.13], [-0.2, 1.17], [0.05, 1.15], [0.42, 0.82]] },
+    door: [0.5, -0.65], hood: 2.05, trunk: -1.95, handles: [-0.5], mirrorZ: 0.3, exhaust: [-0.55, -0.42, 0.42, 0.55],
+    head: [0.82, 0.97, 0.52, 0.64], tail: [-0.99, -0.9, 0.64, 0.76], bar: true, rim: '#1d1f22', signZ: -0.2,
+  },
 };
 
 function makeBody(D, paintHex, opt) {
@@ -334,4 +367,10 @@ export function buildVehicle(style = 'coupe', paint = '#b3161d', opt = {}) {
     const wheel = buildWheel(spec.r, spec.w, opt.rim || D.rim || '#c3c8ce', !!opt.chromeRim);
     return { body, brake, wheel, spec: { ...spec } };
   } finally { Q = 1; }
+}
+
+// Side profile for 2D previews: the dealer panel draws its silhouette from the same numbers as the 3D body.
+export function profile(style) {
+  const D = DESIGNS[style] || DESIGNS.coupe;
+  return { spec: D.spec, top: D.top, bot: D.bot, roof: D.cab.roof, rim: D.rim || '#c3c8ce' };
 }

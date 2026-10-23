@@ -1,0 +1,64 @@
+/* Shops: a bright counter sheet (konbini stripes by default, each shop kind gets its own colours),
+   item tiles, boost chips in the HUD card, and the Bag section of the journal. */
+.shop .sheet { width: min(940px, 95vw); padding: 0; color: #1d2a24; background: #fbfdfc; border-radius: 6px; overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.4); --k1: #12a37d; --k2: #ffffff; --k3: #f4b400; --ink: #0d7a5f; }
+.shop[data-kind="cafe"] .sheet { --k1: #6b4a32; --k2: #e9d8c4; --k3: #6b4a32; --ink: #6b4a32; }
+.shop[data-kind="drug"] .sheet { --k1: #1f6fd1; --k2: #ffffff; --k3: #e8312d; --ink: #1f6fd1; }
+.shop[data-kind="ramen"] .sheet { --k1: #b8322b; --k2: #1b1b1b; --k3: #b8322b; --ink: #b8322b; }
+.shop[data-kind="yakiniku"] .sheet { --k1: #d9582b; --k2: #2a1a12; --k3: #d9582b; --ink: #c24a1f; }
+.shop[data-kind="izakaya"] .sheet { --k1: #c8322b; --k2: #f3e3c3; --k3: #c8322b; --ink: #a8261f; }
+.shop[data-kind="game"] .sheet { --k1: #7a4fc7; --k2: #ff4fa3; --k3: #2fd1e8; --ink: #6a3fb7; }
+.shop header { position: relative; padding: 15px 18px 13px; background: linear-gradient(#ffffff, #f2f6f4); }
+.shop header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -6px; height: 6px; z-index: 1;
+  background: linear-gradient(var(--k1) 0 34%, var(--k2) 34% 66%, var(--k3) 66%); }
+.shop .ttl .jp { color: var(--ink); }
+.sh-say { margin: 18px 18px 2px; min-height: 1.45em; font: 15px/1.45 var(--hand); color: #3c4b44; }
+.sh-say.ok { color: #0d7a5f; } .sh-say.no { color: var(--stamp); } .sh-say.meh { color: #8a6d1d; }
+.sh-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 10px 18px 16px; overflow-y: auto; }
+.sh-item { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 11px 12px; text-align: left;
+  color: inherit; background: #fff; border: 1px solid #dde6e2; border-radius: 6px; --kc: #12a37d;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+.sh-item:hover:not([disabled]), .sh-item.pad-focus { transform: translateY(-2px); border-color: var(--k1); box-shadow: 0 8px 18px rgba(20,40,30,.16); }
+.sh-item.pad-focus { outline: 2px solid var(--k1); outline-offset: 1px; }
+.sh-item[disabled] { opacity: .5; cursor: not-allowed; }
+.sh-item.got { animation: shGot .5s ease; }
+@keyframes shGot { 35% { background: #eaf8f2; transform: scale(1.015); } }
+.k-food { --kc: #d9822b; } .k-drink { --kc: #2f7fc1; } .k-gift { --kc: #c8509b; } .k-tool { --kc: #5b6b75; } .k-meal { --kc: #b8322b; } .k-play { --kc: #7a4fc7; }
+.sh-g { width: 46px; height: 46px; display: grid; place-items: center; font: 800 21px/1 var(--mincho); color: #fff; background: var(--kc);
+  border-radius: 5px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.25); }
+.sh-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sh-tx b { font: 700 14px/1.2 var(--font); }
+.sh-tx .jp { font: 600 11px/1.2 var(--mincho); opacity: .6; }
+.sh-tx em { margin-top: 2px; font-style: normal; font-size: 12px; line-height: 1.35; opacity: .78; }
+.sh-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.sh-tag, .sh-fx, .sh-own { padding: 3px 5px; border-radius: 3px; font: 700 10px/1 var(--mono); font-style: normal; background: #eef3f1; }
+.sh-fx { color: #0d7a5f; background: #e3f6ee; } .sh-own { color: #8a6d1d; background: #fff3d1; }
+.sh-pr { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font: 800 15px/1 var(--mono); }
+.sh-pr small { font: 600 9.5px/1 var(--font); color: var(--stamp); }
+.shop footer { padding: 10px 18px 12px; border-top: 1px solid #dfe8e4; background: #f5f9f7; }
+.sh-wallet b { font-family: var(--mono); color: #0d7a5f; }
+.sh-bag { font-family: var(--mono); opacity: .75; }
+@media (max-width: 680px) { .sh-grid { grid-template-columns: 1fr; } .shop .sheet { width: 98vw; } .sh-say { font-size: 13.5px; } }
+
+/* boost chips under the money in the HUD card */
+.sh-buffs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.sh-buffs[hidden] { display: none; }
+.sh-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 3px; font: 700 10.5px/1 var(--mono); color: #fff;
+  background: rgba(13,122,95,.88); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.sh-chip.c-care { background: rgba(31,111,209,.88); }
+.sh-chip b { font: 800 11px/1 var(--mincho); }
+.sh-chip i { font-style: normal; opacity: .78; }
+
+/* journal: bag */
+.jbag { margin: 0 0 10px; }
+.jbag h4 small { font: 600 11px/1 var(--mono); opacity: .6; margin-left: 6px; }
+.jbuffs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.jbuff { padding: 3px 7px; border-radius: 3px; font: 700 11px/1.2 var(--mono); color: #0d7a5f; background: rgba(18,163,125,.12); }
+.jbuff.c-care { color: #1f5fb1; background: rgba(31,111,209,.12); }
+.jbag-list { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
+.jbag-it { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.jbag-it i { font: 700 11px/1 var(--mono); font-style: normal; opacity: .6; }
+.jbag-g { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 3px; font: 800 12px/1 var(--mincho); color: #fff; background: var(--kc, #12a37d); }
+.jgift { font: 12px/1.2 var(--hand); color: #8a3d6e; }
+.jbag-it .ghost { padding: 3px 8px; font-size: 11px; }
+.jnone { margin: 2px 0 0; font: 13px/1.4 var(--hand); opacity: .7; }

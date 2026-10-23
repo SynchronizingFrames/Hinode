@@ -1,4 +1,5 @@
 // Aoshima residents: procedural bodies, idle animation, they turn to face you, wave, and talk.
+import { storyPlaces } from './story.js';
 import { Builder, hex } from '../engine/geometry.js';
 import { mat4, poseMatrix, multiply, damp, dampAngle } from '../engine/math.js';
 import { CAST } from '../data/cast.js';
@@ -45,7 +46,8 @@ function anchorOf(spot, world) {
     // Stand on the pavement just beside the gate, facing the street.
     return [g[0] - (fz / fl) * 0.9, g[1] + (fx / fl) * 0.9, Math.atan2(fx, fz)];
   }
-  if (spot.depot && world.depot) { const g = world.depot.gate; return [g[0] + 1.7, g[1] - 2.6, Math.PI]; }
+  if (spot.depot && world.depot) { const g = world.depot.gate, o = spot.off || [0, 0]; return [g[0] + 1.7 + o[0], g[1] - 2.6 + o[1], Math.PI]; }
+  if (spot.story) { const p = storyPlaces(world)[spot.story]; if (p) return [p.x, p.z, spot.yaw || 0]; }
   if (spot.at) return [spot.at[0], spot.at[1], spot.yaw || 0];
   return null;
 }
@@ -78,7 +80,7 @@ export class Npcs {
       for (let i = 0; i < 3; i++) { col.resolve([x, 0, z], 0.4, 0, 1.6, tmp); x = tmp.x; z = tmp.z; }
       const mesh = {};
       for (const [k, b] of Object.entries(buildPerson(c.look))) mesh[k] = renderer.mesh(b);
-      this.list.push({ c, mesh, x, z, yaw: a[2], base: a[2], head: 0, phase: Math.random() * 6, wave: 0, near: false, out: true, s: c.look.h || 1, idx: { chat: 0, about: 0 } });
+      this.list.push({ c, mesh, x, z, yaw: a[2], base: a[2], head: 0, phase: Math.random() * 6, wave: 0, seed: Math.random() * 6.28, talk: 0, speak: 0, turn: 0, stepPh: 0, gw: [0, 0, 0, 0], g: 0, gT: 0, near: false, out: true, s: c.look.h || 1, idx: { chat: 0, about: 0 } });
     }
   }
 
@@ -87,8 +89,9 @@ export class Npcs {
   update(dt, player, clock) {
     this.day = clock.day;
     const h = clock.min / 60, px = player.pos[0], pz = player.pos[2];
+    const ts = this.talkState ? this.talkState() : null, withN = ts && ts.n, speaking = !!(ts && ts.speaking);
     for (const n of this.list) {
-      n.out = n.c.hours.some(([a, b]) => h >= a && h < b);
+      n.out = n.c.hours.some(([a, b]) => h >= a && h < b) && (!this.gate || this.gate(n.c.id));
       if (!n.out) continue;
       const dx = px - n.x, dz = pz - n.z, d = Math.hypot(dx, dz);
       const close = d < 4.5;
@@ -97,8 +100,17 @@ export class Npcs {
       n.wave = Math.max(0, n.wave - dt * 0.8);
       n.phase += dt;
       const want = close ? Math.atan2(dx, dz) : n.base + Math.sin(n.phase * 0.21) * 0.5;
-      n.yaw = dampAngle(n.yaw, want, close ? 5 : 1.2, dt);
+      const y0 = n.yaw, me = n === withN;
+      n.yaw = dampAngle(n.yaw, want, me ? 7 : close ? 5 : 1.2, dt);
       n.head = damp(n.head, close ? 0 : Math.sin(n.phase * 0.37) * 0.35, 3, dt);
+      // Body language: shuffle the feet turning on the spot, gesture while speaking, nod while listening.
+      const dy = Math.atan2(Math.sin(n.yaw - y0), Math.cos(n.yaw - y0));
+      n.turn = damp(n.turn, dt > 1e-4 ? Math.abs(dy) / dt : 0, 8, dt);
+      n.stepPh += dt * 9 * Math.min(1, n.turn / 1.2);
+      n.talk = damp(n.talk, me ? 1 : 0, 5, dt);
+      n.speak = damp(n.speak, me && speaking ? 1 : 0, 7, dt);
+      if (me && speaking) { n.gT -= dt; if (n.gT <= 0) { n.g = (n.g + 1 + Math.floor(Math.random() * 3)) % 4; n.gT = 1.1 + Math.random() * 1.3; } }
+      for (let k = 0; k < 4; k++) n.gw[k] = damp(n.gw[k], me && speaking && k === n.g ? 1 : 0, 4, dt);
       if (d < BODY_R && d > 1e-4) { player.pos[0] = n.x + (dx / d) * BODY_R; player.pos[2] = n.z + (dz / d) * BODY_R; }
     }
   }
@@ -147,14 +159,22 @@ export class Npcs {
       const mesh = n.mesh;
       const w = n.wave > 0 ? Math.sin(Math.min(1, (1 - n.wave) * 3) * Math.PI * 0.5) : 0;
       const wag = n.wave > 0 ? Math.sin(time * 14) * 0.35 * Math.min(1, n.wave * 3) : 0;
-      L(mesh.hips, 0, -0.06, 0, 0);
-      L(mesh.torso, 0, 0.06, 0, 0);
-      L(mesh.head, 0, 0.62, 0, Math.sin(n.phase * 0.5) * 0.04, 0, n.head, kid);
-      L(mesh.leg, -0.1, 0, 0, 0);
-      L(mesh.leg, 0.1, 0, 0, 0);
-      L(mesh.arm, -0.29, 0.58, 0, Math.sin(n.phase * 1.7) * 0.03, 0.06);
-      L(mesh.arm, 0.29, 0.58, 0, -w * 2.7, -0.06 - w * 0.3 + wag);
-      if (this.state.last[n.c.id] !== this.day) {
+      // gw: explain (right hand), open hands, hand on heart (left), shrug. Lw: listening, hands together, nodding.
+      const T = n.talk, S = n.speak, gw = n.gw, Lw = T * (1 - S);
+      const ws = Math.sin(n.phase * 0.41 + n.seed) * (1 - 0.6 * T);    // weight drifts from foot to foot
+      const st = Math.sin(n.stepPh) * Math.min(1, n.turn / 1.2);       // little steps while turning to face you
+      const hx = 0.025 * ws, tt = time * 4 + n.seed, sh = 0.04 * gw[3];
+      const nod = S * Math.sin(time * 6.5 + n.seed) * 0.05 + Lw * Math.max(0, Math.sin(time * 1.9 + n.seed)) * 0.07;
+      L(mesh.hips, hx, -0.06, 0, 0, 0.035 * ws);
+      L(mesh.torso, hx * 0.5, 0.06, 0, -Math.sin(n.phase * 1.7) * 0.012 + 0.04 * S, -0.025 * ws, S * Math.sin(tt * 0.5) * 0.06);
+      L(mesh.head, hx * 0.4, 0.62 + sh * 0.5, 0, Math.sin(n.phase * 0.5) * 0.04 + nod, 0.12 * gw[3] + Lw * 0.06 * Math.sin(n.seed * 3), n.head + S * Math.sin(time * 1.3) * 0.08, kid);
+      L(mesh.leg, -0.1 + hx, 0.035 * Math.max(0, st), 0, -0.07 * Math.max(0, ws) + 0.22 * st, -0.029 * ws);
+      L(mesh.leg, 0.1 + hx, 0.035 * Math.max(0, -st), 0, -0.07 * Math.max(0, -ws) - 0.22 * st, -0.029 * ws);
+      const gR = gw[0] * (-0.95 + Math.sin(tt) * 0.25) + gw[1] * (-0.7 + Math.sin(tt * 0.8) * 0.12) - 0.35 * gw[3] - 0.3 * Lw;
+      const gL = gw[1] * (-0.7 + Math.sin(tt * 0.8 + 1) * 0.12) - 1.15 * gw[2] - 0.35 * gw[3] - 0.3 * Lw;
+      L(mesh.arm, -0.29 + hx * 0.5, 0.58 + sh, 0, Math.sin(n.phase * 1.7) * 0.03 + gL, 0.06 - 0.28 * gw[1] - 0.3 * gw[3] + 0.55 * gw[2] + 0.2 * Lw);
+      L(mesh.arm, 0.29 + hx * 0.5, 0.58 + sh, 0, -w * 2.7 + (1 - w) * gR, -0.06 - w * 0.3 + wag + (1 - w) * (-0.22 * gw[0] + 0.28 * gw[1] + 0.3 * gw[3] - 0.2 * Lw));
+      if (this.state.last[n.c.id] !== this.day || (this.storyMark && this.storyMark(n.c.id))) {
         poseMatrix(this.m, n.x, (1.95 + Math.sin(time * 3) * 0.05) * s + (kid > 1 ? 0.2 : 0), n.z, Math.atan2(cx - n.x, cz - n.z), 1);
         r.draw(this.mark, this.m, false);
       }

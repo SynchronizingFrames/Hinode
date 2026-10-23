@@ -2,8 +2,9 @@
 // chase camera assist, speed FOV, headlight pool at night and a speedometer.
 import { mat4, poseMatrix, damp, dampAngle, clamp } from '../engine/math.js';
 import { buildVehicle } from './vehicles.js';
+import { MODELS, STARTER, paintHex } from '../data/cars.js';
 
-const TOP = 41, REV = 9, ACC = 9.2, BRAKE = 17, WB = 2.7, ENTER_R = 2.9, BODY = [-1.4, 0, 1.4], RAD = 0.9;
+const ENTER_R = 2.9;   // handling, wheelbase and body size now come from the model (data/cars.js)
 const GEARS = [0, 9, 16, 24, 32, 44];
 
 function makeSpeedo() {
@@ -17,11 +18,8 @@ function makeSpeedo() {
 
 export class Car {
   constructor(renderer, world, opt = {}) {
-    const v = buildVehicle('coupe', opt.paint || '#b3161d', { rim: '#2b2d31' });
-    this.spec = v.spec;
-    this.mesh = { body: renderer.mesh(v.body), wheel: renderer.mesh(v.wheel), brake: renderer.mesh(v.brake) };
-    const lo = buildVehicle('coupe', opt.paint || '#b3161d', { rim: '#2b2d31', lod: 0.3 });
-    this.lo = { body: renderer.mesh(lo.body), wheel: renderer.mesh(lo.wheel) };
+    this.r = renderer; this.mesh = null; this.lo = null;
+    this.setModel(opt.model || STARTER, opt.paint);
     this.m = mat4(); this.root = mat4(); this.flat = mat4(); this.local = mat4();
     this.world = world; this.col = world.collision; this.edge = (world.edge || 90) + 1.5;
     const E = this.edge; this.bb = world.bounds || { x0: -E, x1: E, z0: -E, z1: E };
@@ -32,6 +30,25 @@ export class Car {
     this.tmp = { x: 0, z: 0, hit: false, nx: 0, nz: 0, tag: null };
     this.baseFov = null; this.look = 0; this.shown = '';
     this.reset();
+  }
+
+  // Swap body and handling. id: a key of MODELS (data/cars.js). paint: a paint id or a hex colour.
+  setModel(id, paint) {
+    const M = MODELS[id] || MODELS[STARTER];
+    const col = typeof paint === 'string' && paint[0] === '#' ? paint : paintHex(paint || M.paint);
+    if (this.mesh && this.model === M.id && this.paintHex === col) return false;
+    const r = this.r, v = buildVehicle(M.style, col), lo = buildVehicle(M.style, col, { lod: 0.3 });
+    const old = [this.mesh, this.lo];
+    this.mesh = { body: r.mesh(v.body), wheel: r.mesh(v.wheel), brake: r.mesh(v.brake) };
+    this.lo = { body: r.mesh(lo.body), wheel: r.mesh(lo.wheel) };
+    for (const set of old) if (set && r.dispose) for (const k of Object.keys(set)) { try { r.dispose(set[k]); } catch (_) { /* already freed */ } }
+    this.spec = v.spec; this.model = M.id; this.paintHex = col; this.info = M; this.h = M.h;
+    this.WB = 2 * v.spec.axle;
+    const half = Math.max(0.9, v.spec.len / 2 - 0.78);
+    this.BODY = [-half, 0, half]; this.RAD = Math.min(1.0, v.spec.wid / 2);
+    this.gears = GEARS.map((g) => g * M.h.top / 41);
+    this.shown = '';
+    return true;
   }
 
   reset() {
@@ -67,12 +84,12 @@ export class Car {
     const sp = Math.abs(vf), thr = Math.max(0, ay), brk = Math.max(0, -ay);
 
     // Steering: plenty of lock when parking, very little at top speed.
-    const lock = 0.62 - 0.46 * clamp(sp / 34, 0, 1);
+    const lock = this.h.lock - 0.46 * clamp(sp / 34, 0, 1);
     this.steer = damp(this.steer, -ax * lock, ax ? 7 : 10, dt);
 
     let a = 0;
-    if (thr) a += vf < -0.4 ? BRAKE * thr : ACC * thr * Math.pow(Math.max(0, 1 - vf / TOP), 0.6);
-    if (brk) a -= vf > 0.4 ? BRAKE * brk : 5.5 * brk * Math.max(0, 1 + vf / REV);
+    if (thr) a += vf < -0.4 ? this.h.brake * thr : this.h.acc * thr * Math.pow(Math.max(0, 1 - vf / this.h.top), 0.6);
+    if (brk) a -= vf > 0.4 ? this.h.brake * brk : 5.5 * brk * Math.max(0, 1 + vf / this.h.rev);
     if (hb) a -= Math.sign(vf) * 6.5;
     if (sp > 0.05) a -= vf * sp * 0.0021 + Math.sign(vf) * (thr || brk ? 0.25 : 0.9);
     const before = vf;
@@ -82,12 +99,12 @@ export class Car {
     this.braking = (brk > 0 && before > 0.4) || (thr > 0 && before < -0.4) || (hb && sp > 0.5);
 
     // Tyres: lateral grip pulls velocity back in line with the nose. Handbrake lets the rear go.
-    const grip = hb ? 1.25 : 7.5 - 2.2 * clamp(sp / TOP, 0, 1) * (thr ? 1 : 0.4);
+    const grip = hb ? 1.25 : this.h.grip - 2.2 * clamp(sp / this.h.top, 0, 1) * (thr ? 1 : 0.4);
     vs *= Math.exp(-grip * dt);
     this.slip = Math.abs(vs);
     this.vx = vf * sy + vs * cy; this.vz = vf * cy - vs * sy;
 
-    const yawWant = (vf * Math.tan(this.steer)) / WB * (hb ? 1.55 : 1);
+    const yawWant = (vf * Math.tan(this.steer)) / this.WB * (hb ? 1.55 : 1);
     this.yawRate = damp(this.yawRate, yawWant, hb ? 4 : 9, dt);
     this.yaw += this.yawRate * dt;
 
@@ -107,13 +124,13 @@ export class Car {
 
   collide(obs) {
     const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw), t = this.tmp;
-    for (let pass = 0; pass < 2; pass++) for (const o of BODY) { // 2 passes: corners where two walls meet
+    for (let pass = 0; pass < 2; pass++) for (const o of this.BODY) { // 2 passes: corners where two walls meet
       const cx = this.x + sy * o, cz = this.z + cy * o;
-      this.col.resolve([cx, 0, cz], RAD, 0.25, 1.2, t, 'walk');   // Tokyo kerbs: the car can't mount the pavement
+      this.col.resolve([cx, 0, cz], this.RAD, 0.25, 1.2, t, 'walk');   // Tokyo kerbs: the car can't mount the pavement
       const dx = t.x - cx, dz = t.z - cz, d = Math.hypot(dx, dz);
       if (d > 1e-4) this.hit(dx / d, dz / d, dx, dz);
       for (const b of obs) {
-        const ex = cx - b.x, ez = cz - b.z, e = Math.hypot(ex, ez), m = RAD + b.r;
+        const ex = cx - b.x, ez = cz - b.z, e = Math.hypot(ex, ez), m = this.RAD + b.r;
         if (e < m && e > 1e-4) this.hit(ex / e, ez / e, (ex / e) * (m - e), (ez / e) * (m - e));
       }
     }
@@ -124,11 +141,11 @@ export class Car {
 
   probe(px, pz, enter) {
     if (this.driving || Math.hypot(px - this.x, pz - this.z) > ENTER_R) return null;
-    return { verb: 'Drive', text: 'Hinode coupe', sub: 'Get in', act: enter };
+    return { verb: 'Drive', text: this.info.name, sub: 'Get in', act: enter };
   }
 
   exitPrompt(exit) {
-    return { verb: 'Get out', text: 'Hinode coupe', sub: this.speed > 3 ? 'Slow down first' : '', act: exit, passive: false };
+    return { verb: 'Get out', text: this.info.name, sub: this.speed > 3 ? 'Slow down first' : '', act: exit, passive: false };
   }
 
   enter(player, cam) {
@@ -170,14 +187,14 @@ export class Car {
       cam.yaw = dampAngle(cam.yaw, this.yaw + Math.PI, 2 + sp * 0.08, dt);
       cam.pitch = damp(cam.pitch, 0.2, 1.5, dt);
     }
-    if (this.baseFov != null) cam.fov = this.baseFov + clamp(sp / TOP, 0, 1) * 0.2;
+    if (this.baseFov != null) cam.fov = this.baseFov + clamp(sp / 41, 0, 1.35) * 0.2;
   }
 
   updateHud(vf) {
     const sp = Math.abs(vf), kmh = Math.round(sp * 3.6);
-    let g = 1; while (g < GEARS.length - 1 && sp > GEARS[g]) g++;
+    const G = this.gears; let g = 1; while (g < G.length - 1 && sp > G[g]) g++;
     const gear = vf < -0.4 ? 'R' : sp < 0.4 ? 'N' : String(g);
-    const rpm = sp < 0.4 ? 0.12 : clamp(0.22 + 0.74 * (sp - GEARS[g - 1]) / (GEARS[g] - GEARS[g - 1]), 0, 0.98);
+    const rpm = sp < 0.4 ? 0.12 : clamp(0.22 + 0.74 * (sp - G[g - 1]) / (G[g] - G[g - 1]), 0, 0.98);
     const key = kmh + gear + Math.round(rpm * 50);
     if (key === this.shown) return;
     this.shown = key;

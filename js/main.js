@@ -14,6 +14,12 @@ import { Npcs } from './game/npcs.js';
 import { Talk } from './ui/talk.js';
 import { TouchControls } from './ui/touch.js';
 import { Car } from './game/car.js';
+import { Shop } from './game/shop.js';
+import { ShopUI } from './ui/shopui.js';
+import { Garage } from './game/garage.js';
+import { Dealer } from './world/dealer.js';
+import { DealerUI } from './ui/dealerui.js';
+import { MODELS, TEST_DRIVE } from './data/cars.js';
 import { Traffic } from './game/traffic.js';
 import { Crowd } from './game/crowd.js';
 import { GameAudio } from './game/audio.js';
@@ -27,6 +33,8 @@ import { Menu, loadSettings, saveSettings, hasSavedSettings } from './ui/menu.js
 import { Cinematic } from './ui/cinematic.js';
 import { PadNav } from './ui/padnav.js';
 import { PadUI } from './ui/padui.js';
+import { Story } from './game/story.js';
+import { StoryUI } from './ui/storyui.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -81,20 +89,116 @@ async function boot() {
   const clock = new Clock(), career = new Career();
   const jobs = new Jobs({ world, clock, career });
   const interact = new Interact(world, jobs);
+  const shop = new Shop({ career, clock });
+  interact.shop = shop;
+  const shopui = new ShopUI(document.body, { shop, career, clock, hudRoot: document.getElementById('hud'), onClose: () => setMode('play'),
+    onBuy: (res) => { try { audio.ui(res.ok ? 'accept' : 'deny'); } catch (_) { /* sound is optional */ } } });
+  interact.onShop = (p) => setMode('shop', p);
+  shop.on((t) => { if (t === 'save') ui.dirty = true; });
   const npcs = new Npcs(r, world);
+  const story = new Story({ jobs, npcs, shop, career });   // story mode: chapters, scenes, phone calls
+  shop.on((t, d) => { if (t === 'gift') story.event('gift', d); }); // gifts can tick off story steps
   let talkWith = null; // the resident you're chatting with; you can keep walking while you talk
   const talk = new Talk(document.body, { onClose: () => { talkWith = null; } });
+  npcs.talkState = () => ({ n: talk.open ? talkWith : null, speaking: talk.open && talk.typing }); // residents gesture while their line types out
   const car = new Car(r, world, { at: [1.6, -9, Math.PI] });
+  // wip22: Hinode Motors. Garage = what you own and drive; Dealer = the lot on Gado-shita.
+  const garage = new Garage({ career });
+  story.garage = garage; // chapter 7 asks for a car Grandma can ride in
+  const dealer = new Dealer(r, world);
+  jobs.payMul = () => garage.payMul();
+  let testDrive = null;
+  const tdEl = document.createElement('div');
+  tdEl.className = 'td-timer'; tdEl.hidden = true; document.body.appendChild(tdEl);
+  const carCare = () => Math.max(0.3, 1 - ((car.info.perk && car.info.perk.care) || 0));
+  const dealerui = new DealerUI(document.body, { garage, career, onClose: () => setMode('play'), onAction: (t, id, paint) => dealerAction(t, id, paint) });
+  const okRes = (res) => res === true || !!(res && res.ok);
+  function placeOut() { car.reset(); [car.x, car.z, car.yaw] = dealer.out; }
+  function syncCar() {
+    if (testDrive) { testDrive = null; tdEl.hidden = true; }
+    car.setModel(garage.active, garage.paintOf(garage.active));
+  }
+  function endTestDrive(msg) {
+    const t = testDrive;
+    if (!t) return;
+    testDrive = null; tdEl.hidden = true;
+    if (car.driving) car.exit(player, cam, true);
+    car.setModel(garage.active, garage.paintOf(garage.active));
+    car.reset(); car.x = t.at[0]; car.z = t.at[1]; car.yaw = t.at[2];
+    player.teleport(dealer.door[0], 0, dealer.door[1], -Math.PI / 2);
+    hud.toast('Test drive over', msg || 'The keys are back with the dealer.', '', 4600);
+  }
+  function tdTick(dt) {
+    const t = testDrive;
+    if (car.driving) t.started = true;
+    else if (t.started) return endTestDrive('You got out, so the dealer took it back.');
+    t.left -= dt;
+    if (t.left <= 0) return endTestDrive('Time is up. Hope you liked the ' + MODELS[t.id].name + '.');
+    const sec = Math.ceil(t.left);
+    if (sec !== t.shown) {
+      t.shown = sec; tdEl.hidden = false;
+      tdEl.innerHTML = 'Test drive \u00b7 ' + MODELS[t.id].name + ' <b>' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + '</b>';
+      tdEl.classList.toggle('low', sec <= 20);
+    }
+  }
+  function dealerAction(t, id, paint) {
+    const m = MODELS[id];
+    if (!m) return { ok: false, msg: 'That car is not on the lot.' };
+    if (t === 'test') {
+      if (garage.owns(id)) return { ok: false, msg: 'That one is already yours.' };
+      if (car.driving || testDrive) return { ok: false, msg: 'Park your own car first.' };
+      testDrive = { id, at: [car.x, car.z, car.yaw], left: TEST_DRIVE, shown: -1, started: false };
+      garage.tests = (garage.tests || 0) + 1;
+      story.event('test', { id });
+      car.setModel(id, paint);
+      placeOut();
+      player.teleport(car.x, 0, car.z, car.yaw);
+      setMode('play');
+      car.enter(player, cam);
+      hud.toast('Test drive \u00b7 ' + m.name, (TEST_DRIVE / 60) + ' minutes on trade plates. Get out or run out of time and it goes back.', 'good', 5200);
+      return { ok: true, msg: '' };
+    }
+    if (testDrive) return { ok: false, msg: 'Bring the test car back first.' };
+    if (t === 'buy') {
+      const res = garage.buy(id, paint);
+      if (!okRes(res)) return { ok: false, msg: (res && res.why) || 'Could not buy that.' };
+      car.setModel(id, paint); placeOut(); doSave();
+      hud.toast('New car \u00b7 ' + m.name, 'Paperwork done. It is parked on Gado-shita, right outside.', 'good', 5600);
+      return { ok: true, msg: 'The ' + m.name + ' is yours. It is waiting at the kerb outside.' };
+    }
+    if (t === 'use') {
+      if (!okRes(garage.use(id))) return { ok: false, msg: 'You are already driving that one.' };
+      car.setModel(id, garage.paintOf(id)); placeOut(); doSave();
+      return { ok: true, msg: 'They brought the ' + m.name + ' round to the kerb.' };
+    }
+    if (t === 'paint') {
+      const res = garage.repaint(id, paint);
+      if (!okRes(res)) return { ok: false, msg: (res && res.why) || 'Could not repaint.' };
+      if (garage.active === id) car.setModel(id, paint);
+      doSave();
+      return { ok: true, msg: 'Fresh paint. Dry by the time you get outside.' };
+    }
+    return { ok: false, msg: '' };
+  }
   const traffic = new Traffic(r, world);
   const crowd = new Crowd(r, world); traffic.crowd = crowd;
   const audio = new GameAudio();
   const weather = new Weather();
   if (params.get('weather')) weather.force(params.get('weather')); // ?weather=rain | storm | clear
+  story.weather = weather; story.wxLock = !!params.get('weather'); // the typhoon chapter brings a storm
   const cine = new Cinematic(world);
+  const storyui = new StoryUI(document.body, $('hud'), world, cine.shots);
   const openTalk = (n) => {
+    const st = story.sceneStep(n.c.id);
+    if (st) {   // this person has a story scene waiting: play it instead of small talk
+      const sc = story.build(st.scene);
+      talkWith = n;
+      talk.start(sc.who, sc.node, { kind: 'story', onEnd: (reached) => story.finishScene(st.scene, reached) });
+      return;
+    }
     const cv = npcs.conversation(n, { clock, career, jobs, open: jobs.board().length });
     talkWith = n;
-    talk.start(cv.who, cv.node);
+    talk.start(cv.who, shop.decorate(cv.node, n.c.id));
   };
   const markers = new Markers(r);
   const hud = new Hud($('hud'), { jobs, career, clock });
@@ -124,18 +228,22 @@ async function boot() {
   const ui = { mode: TEST && !params.has('title') ? 'play' : 'title', saved: 0, dirty: false, autosave: 0 };
 
   const setMode = (m, data) => {
-    board.hide(); journal.hide(); summary.hide(); menu.hide(); talk.hide(); talkWith = null;
+    if (testDrive && (m === 'summary' || m === 'title' || m === 'ending')) endTestDrive('The dealer took the keys back.');
+    board.hide(); shopui.hide(); dealerui.hide(); journal.hide(); summary.hide(); menu.hide(); talk.hide(); talkWith = null;
     if (m !== 'play') touch.reset();
     car.hud.el.hidden = !(m === 'play' && car.driving);
     if (m === 'title') { if (!cine.active) cine.start(weather); }
     else if (cine.active) cine.stop(weather, params.get('weather'));
     ui.mode = m;
+    if (m !== 'ending' && storyui.active) storyui.stop();
     document.body.classList.toggle('at-title', m === 'title');
     input.clear();
     input.enabled = m === 'play';
     if (m !== 'play') input.releaseLock();
     else { if (document.activeElement && document.activeElement !== canvas) document.activeElement.blur(); canvas.focus({ preventScroll: true }); }
     if (m === 'board') board.show();
+    else if (m === 'shop') shopui.show(data);
+    else if (m === 'dealer') dealerui.show(data);
     else if (m === 'journal') journal.show();
     else if (m === 'summary') summary.show(data);
     else if (m === 'title' || m === 'pause') menu.show(m, data);
@@ -143,7 +251,7 @@ async function boot() {
   };
   const endDay = () => setMode('summary', jobs.endDay());
   const board = new Board(document.body, { jobs, clock, onClose: () => setMode('play'), onEndDay: endDay });
-  const journal = new Journal(document.body, { jobs, career, clock, onClose: () => setMode('play') });
+  const journal = new Journal(document.body, { jobs, career, clock, story, shop, onClose: () => setMode('play') });
   const summary = new Summary(document.body, {
     onNext: () => {
       jobs.nextDay();
@@ -159,7 +267,7 @@ async function boot() {
   // Never saves on the title screen or mid-summary (the clock is past closing time there).
   const doSave = () => {
     if (ui.mode === 'title' || ui.mode === 'summary') return false;
-    const ok = store.save(snapshot({ clock, career, jobs, player }));
+    const ok = store.save(snapshot({ clock, career, jobs, player, extra: { story: story.save(), shop: shop.save(), garage: garage.save() } }));
     if (ok) { ui.saved = Date.now(); ui.dirty = false; ui.autosave = 0; }
     return ok;
   };
@@ -171,12 +279,14 @@ async function boot() {
       continue: () => {
         const L = store.load();
         if (!L.data) { menu.show('title', { save: null, note: 'That save could not be read. Start a new game instead.', noteKind: 'bad' }); return; }
-        apply(L.data, { clock, career, jobs, player });
+        const ex = apply(L.data, { clock, career, jobs, player });
+        story.load(ex && ex.story); shop.load(ex && ex.shop); garage.load(ex && ex.garage); syncCar();   // older saves start the story at chapter 1; finished deliveries count
         cam.yaw = player.yaw + Math.PI; cam.focus = null;
         setMode('play');
+        if (!story.done) setTimeout(() => storyui.showCard(story.chapter, 4600), 5200);
         hud.toast(`Welcome back · Day ${clock.day}`, `${clock.fmt()} in Aoshima. Everything is where you left it.`, '', 5000);
       },
-      newGame: () => { setMode('play'); doSave(); setTimeout(startToast, 500); },   // the old save becomes the backup
+      newGame: () => { story.reset(); shop.reset(); garage.reset(); syncCar(); setMode('play'); doSave(); setTimeout(() => storyui.showCard(story.chapter), 400); setTimeout(startToast, 6600); },   // the old save becomes the backup
       resume: () => setMode('play'),
       save: () => doSave(),
       depot: () => { toDepot(); setMode('play'); },
@@ -205,6 +315,26 @@ async function boot() {
     else if (type === 'cancelled') hud.toast(`Dropped · ${d.job.title}`, d.carried ? 'Returned to the board. (-1 trust)' : 'Back on the board.', '', 3000);
   });
 
+  // ---- Story mode events ------------------------------------------------------------
+  story.on((type, d) => {
+    if (type === 'step') { const st = d.step; hud.toast(st.ok || 'Objective complete', st.text, 'good', 3400); }
+    else if (type === 'money') hud.toast(`+¥${Math.round(d.n).toLocaleString('en-US')}`, d.note || 'Added to your wallet', 'big', 4200);
+    if (type === 'save') ui.dirty = true;
+    else if (type === 'chapter') storyui.showCard(d.chapter);
+    else if (type === 'ring') {
+      const sc = d.scene, sp = story.who(sc.caller, sc);
+      hud.toast(sc.phone === 'out' ? `Calling ${sp.name}…` : `☎ ${sp.name} is calling`, sc.place || 'Your phone is ringing.', 'big', 3000);
+      if (settings.volume !== 0) storyui.ring(0.05);
+    } else if (type === 'phone') {
+      const id = d.step.scene, sc = story.build(id);
+      talkWith = null;   // a call follows you; walking doesn't end it
+      talk.start(sc.who, sc.node, { kind: 'phone', onEnd: () => story.finishScene(id, true) });
+    } else if (type === 'scene' && d.scene.note) {
+      const n = d.scene.note;
+      hud.toast('Journal updated', n.length > 96 ? `${n.slice(0, 94)}…` : n, '', 3800);
+    } else if (type === 'finale') { setMode('ending'); storyui.startEnding(weather); }
+  });
+
   // Pre-render the city before the loading screen goes. Every chunk, the car, traffic, crowd and the rain are drawn
   // from three angles at noon, night and dusk (rain on the night pass), so the GPU driver compiles every shader
   // variant and uploads every mesh and texture now, instead of stalling the first time something comes into view.
@@ -225,7 +355,7 @@ async function boot() {
       ENV.time = i;
       r.begin(cam, ENV);
       for (const c of world.chunks) r.draw(c.mesh);
-      try { npcs.draw(r, cam, 0); car.draw(r, cam, 0, ENV); traffic.draw(r, cam); crowd.draw(r, cam); player.draw(r, 0); } catch (_) { /* a prop that is not ready yet is fine */ }
+      try { npcs.draw(r, cam, 0); car.draw(r, cam, 0, ENV); dealer.draw(r, cam); traffic.draw(r, cam); crowd.draw(r, cam); player.draw(r, 0); } catch (_) { /* a prop that is not ready yet is fine */ }
       r.end();
       PREWARM.passes++;
       await new Promise((res) => { let ok = false; const go = () => { if (!ok) { ok = true; res(); } }; requestAnimationFrame(go); setTimeout(go, 120); });
@@ -269,17 +399,17 @@ async function boot() {
       clock.update(dt);
       jobs.update();
       if (clock.min >= DAY_END) { endDay(); input.endFrame(); return; }
-      player.speedMul = jobs.speedMul();
+      player.speedMul = jobs.speedMul() * shop.paceMul();
       player.carry = jobs.carried().map((j) => j.kind);
       if (car.driving && Math.hypot(player.pos[0] - car.x, player.pos[2] - car.z) > 3) car.exit(player, cam, true); // moved by new day / load
       if (car.driving) {
         car.camAssist(cam, input, dt);
         car.update(dt, input, traffic.obstacles(npcs));
-        if (car.impact > 2) jobs.impact(car.impact * 0.6);
+        if (car.impact > 2) jobs.impact(carCare() * car.impact * 0.6 * shop.careMul());
         player.pos[0] = car.x; player.pos[1] = 0; player.pos[2] = car.z; player.vel.fill(0);
       } else {
         player.update(dt, input, cam.yaw, world);
-        if (player.impact) jobs.impact(player.impact);
+        if (player.impact) jobs.impact(player.impact * shop.careMul());
         car.update(dt, input, traffic.obstacles(npcs));
         for (const o of [-1.4, 0, 1.4]) { // can't walk through the parked car
           const cx = car.x + Math.sin(car.yaw) * o, cz = car.z + Math.cos(car.yaw) * o;
@@ -287,9 +417,10 @@ async function boot() {
           if (e < 1.25 && e > 1e-4) { player.pos[0] = cx + (ex / e) * 1.25; player.pos[2] = cz + (ez / e) * 1.25; }
         }
       }
-      traffic.update(dt, car, player);
+      traffic.update(dt, car, player); if (testDrive) tdTick(dt);
       crowd.update(dt, player, car, weather);
       npcs.update(dt, player, clock);
+      story.update(dt, { free: !talk.open, idle: !jobs.active().length });
       // Conversations are an overlay: keep walking and looking while you talk. Walk off and it ends.
       const talking = talk.open;
       if (talking) {
@@ -303,6 +434,7 @@ async function boot() {
       else {
         p = interact.probe(player.pos[0], player.pos[2]);
         if (!p || p.passive) { const tp = npcs.probe(player.pos[0], player.pos[2], openTalk); if (tp) p = interact.current = tp; }
+        if (!p || p.passive) { const dp = dealer.probe(player.pos[0], player.pos[2], (id) => setMode('dealer', id), clock.min, (id) => garage.owns(id)); if (dp && (!dp.passive || !p)) p = interact.current = dp; }
         if (!p || p.passive) { const cp = car.probe(player.pos[0], player.pos[2], () => car.enter(player, cam)); if (cp) p = interact.current = cp; }
       }
       if (talking) p = interact.current = null;
@@ -319,9 +451,22 @@ async function boot() {
       if (ui.mode === 'play' && ((ui.dirty && ui.autosave > 1.5) || ui.autosave > 30)) doSave();
     } else if (ui.mode === 'talk') { talk.update(dt, input); npcs.update(dt, player, clock); }
     else if (ui.mode === 'board') { if (input.tap('Escape') || input.tap('KeyE')) setMode('play'); }
+    else if (ui.mode === 'shop') { if (input.tap('Escape') || input.tap('KeyE')) setMode('play'); }
+    else if (ui.mode === 'dealer') { if (input.tap('Escape')) setMode('play'); }
     else if (ui.mode === 'journal') { if (input.tap('Escape') || input.tap('Tab')) setMode('play'); }
     else if (ui.mode === 'pause') { if (input.tap('Escape') && menu.screen === 'pause') setMode('play'); }
     else if (ui.mode === 'title') cine.update(dt, cam, weather, menu, settings.reduceMotion);
+    else if (ui.mode === 'ending') {
+      npcs.update(dt, player, clock);
+      if (storyui.update(dt, cam, input)) {   // credits closed: the epilogue is a fresh morning
+        story.finish();
+        jobs.endDay(); jobs.nextDay();
+        toDepot();
+        setMode('play');
+        doSave();
+        hud.toast('エピローグ · Epilogue', 'A new morning. Your family is at the depot. The route is yours.', 'big', 7000);
+      }
+    }
     // Esc / B / Circle on a sub-screen (Settings, About) goes back one level, from the title as well.
     if ((ui.mode === 'pause' || ui.mode === 'title') && menu.screen && menu.screen !== ui.mode && input.tap('Escape')) {
       const back = menu.list && menu.list.querySelector('[data-act="back"]'); if (back) back.click();
@@ -334,7 +479,8 @@ async function boot() {
     const tr = jobs.tracked();
     const marks = jobs.targets().map((k) => ({ x: k.x, z: k.z, kind: k.verb, main: !!tr && k.job.id === tr.job.id }));
     let way = tr ? { x: tr.x, z: tr.z, label: `${tr.verb} · ${tr.place.short}` } : null;
-    if (!marks.length && jobs.board().length) {
+    if (!way) { const sg = story.goal(); if (sg) way = { x: sg.x, z: sg.z, label: sg.label }; }
+    if (!way && !marks.length && jobs.board().length) {
       const [bx, bz] = world.depot.board;
       marks.push({ x: bx, z: bz, kind: 'board', main: true });
       way = { x: bx, z: bz, label: 'Delivery board' };
@@ -345,7 +491,7 @@ async function boot() {
   // Test hook: tests pause the live loop and advance the simulation in exact 1/60 s steps,
   // so results don't depend on how fast the (software) test GPU renders.
   if (TEST) window.__HINODE__ = { touch, crowd, audio,
-    weather, cine,
+    weather, cine, story, storyui, openTalk, shop, shopui, garage, dealer, dealerui, dealerAction, endTestDrive, testDrive: () => testDrive,
     r, world, input, cam, player, state, env: ENV, padnav, padui, prewarm: PREWARM, npcs, talk, car, traffic, clock, career, jobs, interact, hud, board, journal, summary, goals,
     ui: { get mode() { return ui.mode; }, setMode, endDay }, menu, store, save: doSave, settings,
     sim(sec, step = 1 / 60) { const n = Math.max(1, Math.round(sec / step)); for (let i = 0; i < n; i++) tick(step); return [...player.pos]; },
@@ -364,7 +510,7 @@ async function boot() {
       if (ui.mode === 'play' && car.driving && car.impact > 1.2 && input.rumble) input.rumble(Math.min(1, car.impact / 8), Math.min(1, car.impact / 5), 160 + Math.min(240, car.impact * 25));
       audio.update(dt, { car, player, input, weather, clock, crowd, mode: ui.mode, paused: state.paused });
 
-      applyTimeOfDay(ENV, ui.mode === 'title' && cine.active ? cine.min : clock.min);
+      applyTimeOfDay(ENV, ui.mode === 'title' && cine.active ? cine.min : ui.mode === 'ending' ? storyui.min : clock.min);
       weather.apply(ENV);
       ENV.lampColBuf = ENV.lampColBuf || new Float32Array(48);
       ENV.lampBuf = nearestLamps(world.lamps, cam.target, ENV.lampBuf, ENV.lampColBuf, ENV.lampCol);
@@ -386,12 +532,13 @@ async function boot() {
       const g = goals();
       markers.draw(r, g.marks, t);
       npcs.draw(r, cam, t);
-      car.draw(r, cam, t, ENV);
+      car.draw(r, cam, t, ENV); dealer.draw(r, cam);
       traffic.draw(r, cam);
       crowd.draw(r, cam);
       if (cam.distNow > 0.55 && !car.driving) player.draw(r, t); // hide the rider when the camera is squeezed into their head
       r.end();
       state.visible = vis;
+      (shopui.tick(), storyui.objective(story.objective(), false));
       hud.update({ prompt: ui.mode === 'play' ? interact.current : null, target: ui.mode === 'play' ? g.way : null, player: player.pos, vp: r.vp });
 
       moved += player.speed * dt;

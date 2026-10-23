@@ -123,6 +123,45 @@ function banner(b, lamps, r, x, y, z, nx, nz, w, h, word, st = signStyle(r)) {
 }
 
 // Vertical sign sticking out of a facade (front face at z = zf, facing fz), readable along the street.
+// wip22: the north coin-parking lot is now Hinode Motors. Display cars, the cabin and pylon collision
+// live in world/dealer.js; this builds the static dressing only.
+function dealerLot(b, lamps, z0, z1) {
+  const mid = (z0 + z1) / 2, RED = hex('#c8102e'), WH = hex('#f1eee7'), STEEL = hex('#2a2c30');
+  b.ground(84, z0, 96, z1, KERB + 0.004, hex('#35373b'), M.asphalt);
+  for (const [a, c] of [[z0 + 0.3, z0 + 5.6], [z1 - 5.6, z1 - 0.3]]) {
+    for (const px of [84.45, 88.15, 91.85, 95.55]) b.ground(px - 0.06, a, px + 0.06, c, KERB + 0.008, T.line);
+  }
+  // pylon: red vertical board over a white panel, lettered on both faces
+  b.box(95.2, KERB, mid, 0.34, 2.2, 0.34, STEEL, { ao: 1 });
+  b.box(95.2, KERB + 2.2, mid, 0.3, 0.95, 2.7, WH, { em: 0.5, ao: 1, bottom: true });
+  b.box(95.2, KERB + 3.15, mid, 0.36, 3.1, 1.25, RED, { em: 0.62, ao: 1 });
+  for (const nx of [-1, 1]) {
+    text(b, '日の出', 95.2 + nx * 0.18, KERB + 4.7, mid, 0.78, nx, 0, WH, 0.95, true, 0.012);
+    text(b, '新車', 95.2 + nx * 0.15, KERB + 2.675, mid + 0.66 * nx, 0.4, nx, 0, RED, 0.5, false, 0.012);
+    text(b, '中古車', 95.2 + nx * 0.15, KERB + 2.675, mid - 0.6 * nx, 0.4, nx, 0, RED, 0.5, false, 0.012);
+  }
+  lamps.push([94, 4.6, mid, 0.55, 1.0, 0.6, 0.55]);
+  // bunting along the street edge
+  const FL = [RED, WH, hex('#1d4fa8'), hex('#f2b705')];
+  for (const zz of [z0 + 0.2, z1 - 0.2]) b.cyl(96, KERB, zz, 0.05, 3.2, T.steel, 6, M.metal);
+  let k = 0;
+  for (let z = z0 + 0.7; z < z1 - 0.5; z += 0.75) {
+    const sag = 0.45 * Math.sin(Math.PI * (z - z0) / (z1 - z0));
+    b.box(96, KERB + 2.72 - sag, z, 0.02, 0.34, 0.3, FL[k++ % 4], { em: 0.15 });
+  }
+  // floodlights over the two rows
+  for (const zz of [z0 + 0.35, z1 - 0.35]) {
+    b.cyl(84.4, KERB, zz, 0.07, 5.2, T.steel, 6, M.metal);
+    b.box(84.9, KERB + 5.0, zz, 1.0, 0.16, 0.36, hex('#fdf6e3'), { em: 0.9, bottom: true });
+    lamps.push([86.5, 5.0, zz + (zz < mid ? 3 : -3), 0.7, 0.92, 0.95, 1.0]);
+  }
+  // little sales cabin between the rows
+  b.box(85.4, KERB, mid, 2.8, 2.5, 4.0, hex('#e8e5de'), { ao: 1 });
+  b.box(86.82, KERB + 0.85, mid, 0.04, 1.35, 3.2, hex('#ffe7b8'), { em: 0.55 });
+  b.box(85.4, KERB + 2.5, mid, 3.1, 0.16, 4.4, RED, { em: 0.2, ao: 1, bottom: true });
+  lamps.push([87.2, 2.4, mid, 0.35, 1.0, 0.85, 0.6]);
+}
+
 function vsign(b, lamps, r, x, zf, fz, yTop, word, s) {
   const st = signStyle(r), n = [...word].length;
   const H = n * s * 1.06 + s * 0.55, wd = s * 1.5, th = 0.24, out = 0.25;
@@ -738,12 +777,15 @@ export function buildTokyo(ch, col, lamps) {
     let x = 84;
     for (const w of [6.5, 5.8]) { const bz0 = fz > 0 ? zf - 12 : zf, bz1 = fz > 0 ? zf : zf + 12; building(ch, col, lamps, r, x, bz0, x + w - 0.2, bz1, fz, x === 84 ? [-1] : [1], 0.6, { floors: r.int(2, 4) }, shops); x += w; }
     const pz0 = fz > 0 ? zf - 34 : zf + 14, pz1 = fz > 0 ? zf - 14 : zf + 34, b = ch.at(90, (pz0 + pz1) / 2);
-    b.ground(84, pz0, 96, pz1, KERB + 0.004, hex('#4a4c50'), M.asphalt);
-    for (let px = 84.2; px < 96; px += 2.5) b.ground(px, pz0 + 0.3, px + 0.12, pz0 + 5.3, KERB + 0.008, T.line);
-    b.cyl(95.2, KERB, (pz0 + pz1) / 2, 0.08, 4.2, T.steel, 6, M.metal);
-    b.box(95.2, KERB + 4.2, (pz0 + pz1) / 2, 0.2, 1.6, 1.6, hex('#ffd400'), { em: 0.66, ao: 1 });
-    for (const nx of [-1, 1]) text(b, 'P', 95.2 + nx * 0.1, KERB + 5.0, (pz0 + pz1) / 2, 1.2, nx, 0, hex('#1b3f9c'), 0, false, 0.01);
-    lamps.push([94, 4.5, (pz0 + pz1) / 2, 0.5, 1.0, 0.9, 0.5]);
+    if (fz < 0) dealerLot(b, lamps, pz0, pz1);   // wip22: the north lot is Hinode Motors
+    else {
+      b.ground(84, pz0, 96, pz1, KERB + 0.004, hex('#4a4c50'), M.asphalt);
+      for (let px = 84.2; px < 96; px += 2.5) b.ground(px, pz0 + 0.3, px + 0.12, pz0 + 5.3, KERB + 0.008, T.line);
+      b.cyl(95.2, KERB, (pz0 + pz1) / 2, 0.08, 4.2, T.steel, 6, M.metal);
+      b.box(95.2, KERB + 4.2, (pz0 + pz1) / 2, 0.2, 1.6, 1.6, hex('#ffd400'), { em: 0.66, ao: 1 });
+      for (const nx of [-1, 1]) text(b, 'P', 95.2 + nx * 0.1, KERB + 5.0, (pz0 + pz1) / 2, 1.2, nx, 0, hex('#1b3f9c'), 0, false, 0.01);
+      lamps.push([94, 4.5, (pz0 + pz1) / 2, 0.5, 1.0, 0.9, 0.5]);
+    }
   }
   viaduct(ch, col, lamps, r);
   gate(ch, lamps);

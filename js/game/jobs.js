@@ -1,3 +1,5 @@
+import { storyPlaces } from './story.js';
+import { CAST } from '../data/cast.js';
 // Delivery jobs: board, accept, collect, deliver, deadlines, fragile damage, rewards, day end.
 // Pure logic (no DOM). State is plain data so it can be saved later.
 import { PKG, AUTHORED, RESIDENTS, ITEMS, LINES, SENDERS, SHOP_LABEL, PLAIN_SHOPS, FOOD_SHOPS } from '../data/jobs.js';
@@ -60,6 +62,17 @@ export class Jobs {
       });
       this.shopIds.push(i);
     });
+    // Story places: residents who stand somewhere in town (Murakami-san's alley), and Mum outside her café.
+    for (const c of CAST) if (c.spot && c.spot.at) {
+      this.places.set(`npc:${c.id}`, { ref: `npc:${c.id}`, kind: 'npc', name: c.name, short: c.name, jp: c.jp, addr: c.role, x: c.spot.at[0], z: c.spot.at[1] });
+    }
+    // Residents who wait outside their own house (Hayashi-sensei): their stop is that front door.
+    for (const c of CAST) if (c.spot && c.spot.lot != null && !c.spot.at && world.lots && world.lots.length) {
+      const l = world.lots[c.spot.lot % world.lots.length], g = l.gate || l.door;
+      this.places.set(`npc:${c.id}`, { ref: `npc:${c.id}`, kind: 'npc', name: c.name, short: c.name, jp: c.jp, addr: l.addr, x: g[0], z: g[1] });
+    }
+    const sp = storyPlaces(world).akiko, shopPl = this.places.get(`shop:${sp.shop}`);
+    this.places.set('story:akiko', { ref: 'story:akiko', kind: 'story', name: 'Mum', short: 'Mum', jp: '明子', addr: shopPl ? `${shopPl.name}, ${shopPl.addr}` : 'Shinjuku', x: sp.x, z: sp.z });
     const missing = [];
     for (const a of AUTHORED) for (const ref of [a.from, a.to]) if (!this.places.has(ref)) missing.push(`${a.id} -> ${ref}`);
     if (missing.length) throw new Error('Delivery data points at places that do not exist: ' + missing.join(', '));
@@ -89,6 +102,7 @@ export class Jobs {
   refresh() {
     for (const a of AUTHORED) {
       if (this.completed.has(a.id) || this.jobs.has(a.id)) continue;
+      if (a.gate && !(this.flags && this.flags.has(a.gate))) continue;
       if (a.requires.every((q) => this.completed.has(q))) this.jobs.set(a.id, this.fresh({ ...a, authored: true }));
     }
     // Daily work shows up once the first story delivery is done, topping the board up to BOARD_SIZE.
@@ -181,7 +195,7 @@ export class Jobs {
     j.state = 'delivered';
     const quick = !j.late && now - j.acceptedAt <= j.limit * 0.5;
     const care = j.kind === 'fragile' ? 0.3 + 0.7 * j.condition : 1;
-    const pay = r10(j.reward * (j.late ? 0.6 : 1) * care * (quick ? 1.2 : 1));
+    const pay = r10(j.reward * (j.late ? 0.6 : 1) * care * (quick ? 1.2 : 1) * (this.payMul ? this.payMul() : 1));
     const xp = Math.round(j.xp * (j.late ? 0.5 : 1) * (quick ? 1.25 : 1));
     const trust = j.late ? -1 : (j.trust || 1);
     this.career.addMoney(pay);

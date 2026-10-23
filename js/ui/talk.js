@@ -1,7 +1,7 @@
 // Conversation box: who you're talking to, their line typed out, numbered replies.
 // Keys: 1-4 pick a reply, E / Enter (or a tap on the card) skip or continue, Esc or the cross leaves.
 // It is an overlay: the player keeps walking and looking around while it is open (Space stays jump).
-const KEYS = ['Digit1', 'Digit2', 'Digit3', 'Digit4'];
+const KEYS = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'];
 
 export class Talk {
   constructor(root, { onClose } = {}) {
@@ -28,18 +28,29 @@ export class Talk {
   show() { this.el.hidden = false; this.open = true; }
   hide() { this.el.hidden = true; this.open = false; }
 
-  start(who, node) {
-    this.who = who;
-    this.q('.jp').textContent = who.jp;
-    this.q('.nm').textContent = who.name;
-    this.q('.role').textContent = who.role;
-    this.q('.bond').textContent = who.bond || '';
+  // opts: { onEnd(reachedEnd), kind: 'phone' | 'story' }. Story scenes chain lines with node.next and can
+  // switch speaker per line with node.who; narration lines carry cls 'narr'.
+  start(who, node, opts = {}) {
+    this.onEnd = opts.onEnd || null; this.reached = false;
+    this.el.classList.toggle('phone', opts.kind === 'phone');
+    this.el.classList.toggle('story', !!opts.kind);
+    this.setWho(who);
     this.show();
     this.say(node);
   }
 
+  setWho(who) {
+    this.who = who;
+    this.q('.jp').textContent = who.jp || '';
+    this.q('.nm').textContent = who.name || '';
+    this.q('.role').textContent = who.role || '';
+    this.q('.bond').textContent = who.bond || '';
+  }
+
   say(node) {
     this.node = node;
+    if (node.who) this.setWho(node.who);
+    this.el.classList.toggle('narr', node.cls === 'narr');
     this.text = node.line || '';
     this.shown = 0;
     this.opts = node.options || [];
@@ -47,6 +58,9 @@ export class Talk {
     this.$opts.innerHTML = '';
     this.$opts.hidden = true;
   }
+
+  // Reached the natural end of the conversation (not walked off or Esc).
+  finish() { this.reached = true; this.close(); }
 
   showOpts() {
     this.$opts.innerHTML = '';
@@ -66,10 +80,18 @@ export class Talk {
     const o = this.opts[i];
     if (!o) return;
     const next = o.run();
-    if (next) this.say(next); else this.close();
+    if (next) this.say(next); else this.finish();
   }
 
-  close() { if (!this.open) return; this.hide(); if (this.onClose) this.onClose(); }
+  close() {
+    if (!this.open) return;
+    this.hide();
+    const f = this.onEnd, r = this.reached;
+    this.onEnd = null; this.reached = false;
+    this.el.classList.remove('phone', 'story', 'narr');
+    if (this.onClose) this.onClose();
+    if (f) f(r);
+  }
 
   get typing() { return this.shown < this.text.length; }
 
@@ -84,7 +106,13 @@ export class Talk {
       if (!this.typing) { this.$line.textContent = this.text; if (this.opts.length) this.showOpts(); }
       return;
     }
-    if (!this.opts.length) { if (adv) this.close(); return; }
+    if (!this.opts.length) {
+      if (!adv) return;
+      const nx = this.node && this.node.next;
+      const n2 = typeof nx === 'function' ? nx() : nx;
+      if (n2) this.say(n2); else this.finish();
+      return;
+    }
     for (let i = 0; i < KEYS.length; i++) if (input.tap(KEYS[i])) return this.pick(i);
   }
 }
